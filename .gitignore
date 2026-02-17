@@ -1,0 +1,16 @@
+# Firebase Secrets
+*.json
+src/cobot1/config/*.json
+
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# OS specific
+.DS_Store

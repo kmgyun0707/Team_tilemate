@@ -4,7 +4,7 @@
   <name>cobot1</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="jsa01jsa15@gmail.com">sa</maintainer>
+  <maintainer email="ju460648@gmail.com">jeonguk</maintainer>
   <license>Apache-2.0</license>
 
   <test_depend>ament_copyright</test_depend>

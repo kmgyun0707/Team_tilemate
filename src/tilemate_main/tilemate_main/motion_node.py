@@ -14,7 +14,7 @@ from tilemate_main.robot_config import RobotConfig
 
 
 # -------------------------
-# gripper: motion -> gripper_node
+# gripper: motion -> gripper_node#
 # -------------------------
 class _GripperClient:
     def __init__(self, node: Node):

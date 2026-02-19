@@ -10,7 +10,7 @@
 #   /robot/speed                    (std_msgs/Int32)
 #   /robot/collision_sensitivity    (std_msgs/Int32)
 # 발행 토픽:
-#   /robot/command        (std_msgs/String)  "start" | "pause" | "reset" ~
+#   /robot/command        (std_msgs/String)  "start" | "pause" | "reset" 
 
 import threading
 import rclpy

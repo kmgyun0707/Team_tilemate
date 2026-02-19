@@ -1,0 +1,164 @@
+# fire3.py  (내 컴퓨터에서 실행)
+# ROS2 토픽 subscribe → Firebase Realtime DB 업데이트
+# Firebase robot_command 감지 → /robot/command 토픽 publish
+#
+# 구독 토픽:
+#   /robot/step                     (std_msgs/Int32)
+#   /robot/state                    (std_msgs/String)
+#   /robot/tcp                      (std_msgs/Float32MultiArray)  [x,y,z,rx,ry,rz]
+#   /robot/completed_jobs           (std_msgs/Int32)
+#   /robot/speed                    (std_msgs/Int32)
+#   /robot/collision_sensitivity    (std_msgs/Int32)
+# 발행 토픽:
+#   /robot/command        (std_msgs/String)  "start" | "pause" | "reset"
+
+import threading
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Int32, String, Float32MultiArray
+
+import firebase_admin
+from firebase_admin import credentials, db
+import time
+
+# ── Firebase 설정 ──────────────────────────────────────────
+SERVICE_ACCOUNT_KEY_PATH = "/home/sa/cobot_ws/src/cobot1/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
+DATABASE_URL = "https://co1-tiling-default-rtdb.asia-southeast1.firebasedatabase.app"
+
+
+class FirebaseBridgeNode(Node):
+    def __init__(self):
+        super().__init__("firebase_bridge")
+
+        # Firebase 초기화
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(SERVICE_ACCOUNT_KEY_PATH)
+            firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})
+        self.ref     = db.reference("/robot_status")
+        self.cmd_ref = db.reference("/robot_command/action")
+        self.get_logger().info("Firebase Connected!")
+
+        # Firebase 초기 상태
+        self.ref.update({
+            "current_step":  0,
+            "state":         "대기",
+            "pos_x":         0.0,
+            "pos_y":         0.0,
+            "pos_z":         0.0,
+            "completed_jobs": 0,
+        })
+
+        # ── Publisher: 웹 명령 → 로봇 컴퓨터 ──────────────
+        self._pub_cmd = self.create_publisher(String, '/robot/command', 10)
+
+        # ── Subscriber: 로봇 상태 → Firebase ──────────────
+        self.create_subscription(Int32,             "/robot/step",                self._cb_step,                10)
+        self.create_subscription(String,            "/robot/state",               self._cb_state,               10)
+        self.create_subscription(Float32MultiArray, "/robot/tcp",                 self._cb_tcp,                 10)
+        self.create_subscription(Int32,             "/robot/completed_jobs",      self._cb_completed_jobs,      10)
+        self.create_subscription(Int32,             "/robot/speed",               self._cb_speed,               10)
+        self.create_subscription(Int32,             "/robot/collision_sensitivity",self._cb_collision_sensitivity,10)
+
+        self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, /robot/completed_jobs, /robot/speed, /robot/collision_sensitivity")
+        self.get_logger().info("Publishing: /robot/command")
+
+        # TCP throttle
+        self._last_tcp_update = 0.0
+
+        # Firebase 명령 감지 스레드 (0.3초 polling)
+        # 시작 시 현재 Firebase 값으로 초기화 (재실행 시 묵은 명령 무시)
+        current_action = self.cmd_ref.get()
+        self._last_command = current_action if current_action else "idle"
+        self.get_logger().info(f"Firebase 현재 명령 상태: '{self._last_command}' (무시하고 시작)")
+
+        # Firebase를 idle로 리셋해서 새 명령만 받도록
+        self.cmd_ref.set("idle")
+
+        self._cmd_thread = threading.Thread(target=self._watch_firebase_command, daemon=True)
+        self._cmd_thread.start()
+
+    # ── Firebase 명령 감지 루프 ────────────────────────────
+    def _watch_firebase_command(self):
+        """Firebase robot_command/action 변화 감지 → /robot/command publish"""
+        self.get_logger().info("Firebase command watcher started...")
+        while rclpy.ok():
+            try:
+                action = self.cmd_ref.get()
+                if action and action != self._last_command:
+                    self._last_command = action
+                    if action in ("start", "pause", "reset"):
+                        msg = String()
+                        msg.data = action
+                        self._pub_cmd.publish(msg)
+                        self.get_logger().info(f"[CMD] Firebase '{action}' → /robot/command publish")
+
+                        # reset이면 Firebase robot_status 전체 초기화
+                        if action == "reset":
+                            self.ref.set({
+                                "current_step":   0,
+                                "state":          "대기",
+                                "pos_x":          0.0,
+                                "pos_y":          0.0,
+                                "pos_z":          0.0,
+                                "completed_jobs": 0,
+                                "working_tile":   0,
+                                "speed":          0,
+                            })
+                            self.get_logger().info("[RESET] Firebase robot_status 전체 초기화 완료")
+            except Exception as e:
+                self.get_logger().error(f"Firebase watch error: {e}")
+            time.sleep(0.3)
+
+    # ── 콜백: 로봇 상태 → Firebase ────────────────────────
+    def _cb_step(self, msg: Int32):
+        self.ref.update({"current_step": msg.data})
+        self.get_logger().info(f"[STEP] → Firebase: {msg.data}")
+
+    def _cb_state(self, msg: String):
+        self.ref.update({"state": msg.data})
+        self.get_logger().info(f"[STATE] → Firebase: {msg.data}")
+
+    def _cb_completed_jobs(self, msg: Int32):
+        self.ref.update({"completed_jobs": msg.data})
+        self.get_logger().info(f"[COMPLETED] → Firebase: {msg.data}")
+
+    def _cb_speed(self, msg: Int32):
+        self.ref.update({"speed": msg.data})
+        self.get_logger().info(f"[SPEED] → Firebase: {msg.data}")
+
+    def _cb_collision_sensitivity(self, msg: Int32):
+        self.ref.update({"collision_sensitivity": msg.data})
+        self.get_logger().info(f"[COLLISION] → Firebase: {msg.data}")
+
+    def _cb_tcp(self, msg: Float32MultiArray):
+        now = time.time()
+        if now - self._last_tcp_update < 0.2:  # 0.2초 throttle
+            return
+        self._last_tcp_update = now
+        data = msg.data
+        if len(data) >= 3:
+            self.ref.update({
+                "pos_x": round(float(data[0]), 2),
+                "pos_y": round(float(data[1]), 2),
+                "pos_z": round(float(data[2]), 2),
+            })
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = FirebaseBridgeNode()
+    print("Firebase Bridge running... (Ctrl+C to stop)")
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        try:
+            db.reference("/robot_status").update({"state": "대기", "current_step": 0})
+        except Exception:
+            pass
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

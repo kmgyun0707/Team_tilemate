@@ -34,6 +34,7 @@ setup(
             'sensor=               cobot1.sensor_test:main',
             'fire=                 cobot1.firebase_bridge:main',
             'fire2=                cobot1.fire2:main',
+            'fire3=                cobot1.fire3:main',
             'basic2=               cobot1.basic2:main',
             'tile_pic =            cobot1.tile_pic_place3:main',
             'tile_no_gripper =     cobot1.tile_pic_place3_no_gripper:main',

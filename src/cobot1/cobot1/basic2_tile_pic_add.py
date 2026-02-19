@@ -11,6 +11,11 @@ from cobot1 import move_pause_resume # 로봇 제어 유틸리티 모듈 import
 from cobot1 import tile_pic_place3 as tile_pic_place3_module
 from cobot1 import tile_pic_place3_no_gripper as tile_pic_place3_no_gripper_module
 
+# 그리퍼용 
+from cobot1 import scraper_task_module
+
+
+
 # 로봇 설정 상수
 ROBOT_ID = "dsr01"
 ROBOT_MODEL = "m0609"
@@ -151,8 +156,8 @@ def perform_task():
         # Step 1: 접착제 파지
         print("Step 1: Moving to JReady (접착제 파지)")
         update_robot_step(1)
-        movej(JReady, vel=VELOCITY, acc=ACC)
-        
+        scraper_task_module.run_scraper_task()
+
         if cmd_ref.get() == "reset": continue
 
         # Step 2: 접착제 도포 (가상 공정)
@@ -208,6 +213,17 @@ def main(args=None):
         
         # tile_pic_place3_no_gripper 모듈의 로봇 초기화도 실행
         tile_pic_place3_no_gripper_module.initialize_robot()
+        
+        # 스크래퍼 동작 초기화
+        scraper_task_module.initialize(
+            node=DR_init.__dsr__node,
+            robot_id=ROBOT_ID,
+            robot_model=ROBOT_MODEL,
+            tool=ROBOT_TOOL,
+            tcp=ROBOT_TCP,
+            vel=VELOCITY,
+            acc=ACC
+        )
         
         wait_for_start() # 시작 명령 대기 추가
         perform_task()

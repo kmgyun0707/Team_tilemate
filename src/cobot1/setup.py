@@ -24,7 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'fire3=                cobot1.fire3:main',
+            'fire=cobot1.firebase_bridge:main',
         ],
     },
 )

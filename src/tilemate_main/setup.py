@@ -30,9 +30,10 @@ setup(
     entry_points={
         'console_scripts': [
             'gripper_node = tilemate_main.gripper_node:main',
-            'motion_node = tilemate_main.motion_node:main',
+            'scraper_motion_node = tilemate_main.scraper_motion_node:main',
             'task_controller_node = tilemate_main.task_controller_node:main',
             'command_node = tilemate_main.command_node:main',
+            'tile_motion_node = tilemate_main.tile_motion_node:main',
         ],
     },
 )

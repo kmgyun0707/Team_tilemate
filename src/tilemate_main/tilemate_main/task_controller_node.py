@@ -17,7 +17,7 @@ class TaskControllerNode(Node):
 
         self._run_token = 0
 
-        self.pub_run = self.create_publisher(Int32, "/task/run_once", 10)
+        self.pub_run = self.create_publisher(Int32, "/scraper/run_once", 10)
         self.pub_pause = self.create_publisher(Bool, "/task/pause", 10)
         self.pub_stop_soft = self.create_publisher(Bool, "/task/stop_soft", 10)
 

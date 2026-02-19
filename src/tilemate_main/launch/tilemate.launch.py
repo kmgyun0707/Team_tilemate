@@ -16,8 +16,8 @@ def generate_launch_description():
         # 2) DSR_ROBOT2 모션 전용 노드 (내부에서 namespace=dsr01로 생성됨)
         Node(
             package="tilemate_main",
-            executable="motion_node",
-            name="motion_node",
+            executable="scraper_motion_node",
+            name="scraper_motion_node",
             output="screen",
         ),
 
@@ -34,6 +34,13 @@ def generate_launch_description():
             package="tilemate_main",
             executable="command_node",
             name="command_node",
+            output="screen",
+        ),
+        # 5 tile배치 노드
+        Node(
+            package="tilemate_main",
+            executable="tile_motion_node",
+            name="tile_motion_node",
             output="screen",
         ),
     ])

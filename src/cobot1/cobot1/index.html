@@ -489,9 +489,8 @@
     function confirmDesign() {
         if (!selectedDesign) { alert('패턴을 선택해주세요!'); return; }
         closePopup();
-        // Firebase에 design 번호 발행
-        database.ref('robot_status').update({ design: selectedDesign });
-        database.ref('robot_command').set({ action: 'start', timestamp: Date.now() });
+        // robot_command에 action + design 번호 함께 전송
+        database.ref('robot_command').set({ action: 'start', design: selectedDesign, timestamp: Date.now() });
         // 기존 start 로직
         isStarted = true;
         if (!timerInterval) startTimer();

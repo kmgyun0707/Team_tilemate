@@ -154,12 +154,15 @@ def get_place_tilt_nm(n: int, m: int, offset: int = 1):
     if offset == 1:
         n_offset_mm = 0.0
     elif offset == 2:
-        n_offset_mm = 45.0  # ✅ 주석대로면 +45mm가 맞아서 이걸 적용하는게 정상
+        n_offset_mm = 0.0  
     else:
         raise ValueError(f"Invalid offset={offset} (only 1 or 2)")
 
     base[0] += n_offset_mm
     return base
+
+
+
 
 
 # ============================================================
@@ -292,8 +295,43 @@ class TileMotionNode(Node):
             self._running = False
 
     def _perform_task_2x2(self):
-        """원본 perform_task(node) 내용을 그대로 이식 (set_gripper -> self.gripper.set_width)"""
         from DSR_ROBOT2 import movej, movel, wait
+        from DSR_ROBOT2 import (
+            set_ref_coord, task_compliance_ctrl, release_compliance_ctrl,
+            set_desired_force, release_force, check_force_condition,
+            DR_BASE, DR_TOOL, DR_AXIS_Z, DR_FC_MOD_REL
+        )
+
+        # 힘제어/순응제어 (force control / compliance control)
+        def hold_with_force_4n(hold_n=4.0, timeout_s=3.0):
+            # 타일 임시 고정: 슬라이드 정렬 끝난 뒤, 오픈 전 Z방향으로 hold_n 만큼 눌러 고정
+            set_ref_coord(DR_TOOL)  # Tool 좌표계 기준 (안전)
+            task_compliance_ctrl(stx=[1000, 1000, 200, 200, 200, 200])
+            wait(0.3)
+
+            set_desired_force(
+                fd=[0, 0, hold_n, 0, 0, 0],
+                dir=[0, 0, 1, 0, 0, 0],
+                mod=DR_FC_MOD_REL
+            )
+
+            t0 = time.time()
+            while True:
+                # NOTE: check_force_condition의 리턴 의미는 환경마다 다를 수 있어 로그로 확인 추천
+                ret = check_force_condition(DR_AXIS_Z, min=0, max=hold_n)
+                if ret == -1:
+                    break
+
+                if time.time() - t0 > timeout_s:
+                    self.get_logger().warn("[HOLD] force condition timeout -> release")
+                    break
+
+                wait(0.2)
+
+            release_force()
+            release_compliance_ctrl()
+            set_ref_coord(DR_BASE)
+            wait(0.2)
 
         JReady = [0, 0, 90, 0, 90, 90]
 
@@ -303,8 +341,6 @@ class TileMotionNode(Node):
         self.get_logger().info("[TILE] Gripper OPEN init")
         self.gripper.set_width(OPEN_W)
         time.sleep(0.3)
-
-        total = len(PLACE_PLAN_2x2)
 
         for k, (n, m, offset) in enumerate(PLACE_PLAN_2x2):
             if self._stop_soft:
@@ -328,20 +364,14 @@ class TileMotionNode(Node):
             place_m1   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M1),   PLACE_MOVE_BASE1)
             place_m2   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M2),   PLACE_MOVE_BASE2)
             place_m3   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M3),   PLACE_MOVE_BASE3)
-            # place_m4   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M4),   PLACE_MOVE_BASE4)
-            # place_m5   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M5),   PLACE_MOVE_BASE5)
-
-            self.get_logger().info(f"[TILE] [{k+1}/{total}] (n,m,offset)=({n},{m},{offset}) pick_dy={pick_dy:.1f}")
-            self.get_logger().info(f"[TILE] place_tilt={place_tilt}")
-            self.get_logger().info(f"[TILE] place_down={place_down}")
+            place_m4   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M4),   PLACE_MOVE_BASE4)
+            place_m5   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M5),   PLACE_MOVE_BASE5)
 
             # ---------------- PICK ----------------
             movel(pick_above, vel=VELOCITY, acc=ACC)
             movel(pick_down,  vel=10, acc=10)
-
             self.gripper.set_width(CLOSE_W)
             wait(0.3)
-
             movel(pick_above, vel=VELOCITY, acc=ACC)
             movel(pick_move,  vel=VELOCITY, acc=ACC)
 
@@ -349,18 +379,25 @@ class TileMotionNode(Node):
             movel(place_tilt, vel=VELOCITY, acc=ACC)
             movel(place_down, vel=5, acc=5)
 
+            # 슬라이드(정렬)
             movel(place_m1, vel=10, acc=10)
             movel(place_m2, vel=10, acc=10)
 
+            # 힘제어로 타일 고정 (슬라이드 후, 오픈 전에)
+            hold_with_force_4n(hold_n=4.0, timeout_s=3.0)
+
+            # 릴리즈
             self.gripper.set_width(OPEN_W)
             time.sleep(0.3)
 
-            movel(place_m3,  vel=10, acc=10)
+            # 후퇴
+            movel(place_m3, vel=10, acc=10)
+            # movel(place_m4, vel=10, acc=10)
+            # movel(place_m5, vel=10, acc=10)
             movel(place_tilt, vel=VELOCITY, acc=ACC)
 
         self.get_logger().info("[TILE] Finish: Move to JReady")
         movej(JReady, vel=VELOCITY, acc=ACC)
-
 
 # ============================================================
 # Main (DSR import 패턴 + spin_once 루프)

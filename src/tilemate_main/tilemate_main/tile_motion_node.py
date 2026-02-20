@@ -203,9 +203,9 @@ class TileMotionNode(Node):
         self._running = False
 
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
-        self.pub_state = self.create_publisher(String, "/robot/state", 10)
-        self.pub_step = self.create_publisher(Int32, "/robot/step", 10 )
-        self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10)
+        self.pub_state = self.create_publisher(String, "/tile/state", 10)
+        self.pub_step  = self.create_publisher(Int32,  "/tile/step", 10)
+        self.pub_completed_jobs = self.create_publisher(Int32, "/tile/completed_jobs", 10)
         self._completed_jobs = 0
         #
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
@@ -228,7 +228,7 @@ class TileMotionNode(Node):
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
         time.sleep(1.0)
 
-    def _set_robot_status(self, step: int, state: str):
+    def _set_tile_status(self, step: int, state: str):
         m_step = Int32()
         m_step.data = step
         m_state = String()
@@ -301,7 +301,7 @@ class TileMotionNode(Node):
             if not self._stop_soft:
                 
                 
-                self._set_robot_status(5, "타일 작업 완료")
+                self._set_tile_status(5, "타일 작업 완료")
 
             self._publish_status(f"done:{tok}")
 
@@ -387,7 +387,7 @@ class TileMotionNode(Node):
             place_m5   = apply_rpy(add_xyz_offset_keep_rpy(place_tilt, *REL_M5),   PLACE_MOVE_BASE5)
 
             # ---------------- PICK ----------------
-            self._set_robot_status(3, f"타일 파지중 [{k+1}/{len(PLACE_PLAN_2x2)}]")
+            self._set_tile_status(3, f"타일 파지중 [{k+1}/{len(PLACE_PLAN_2x2)}]")
             movel(pick_above, vel=VELOCITY, acc=ACC)
             movel(pick_down,  vel=10, acc=10)
             self.gripper.set_width(CLOSE_W)
@@ -396,7 +396,7 @@ class TileMotionNode(Node):
             movel(pick_move,  vel=VELOCITY, acc=ACC)
 
             # ---------------- PLACE ----------------
-            self._set_robot_status(4, f"타일 배치중 [{k+1}/{len(PLACE_PLAN_2x2)}]")
+            self._set_tile_status(4, f"타일 배치중 [{k+1}/{len(PLACE_PLAN_2x2)}]")
             movel(place_tilt, vel=VELOCITY, acc=ACC)
             movel(place_down, vel=5, acc=5)
 

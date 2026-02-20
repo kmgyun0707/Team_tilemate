@@ -66,6 +66,65 @@
         .tile.finished { background-color: #1a237e; border-color: #0d124a; color: white; }
         
         #three-container { flex: 1.5; height: 450px; background: #f8f9fa; border-radius: 12px; border: 1px solid #ccc; }
+
+        /* ── 디자인 선택 팝업 ── */
+        .popup-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .popup-overlay.show { display: flex; }
+        .popup-box {
+            background: white;
+            border-radius: 16px;
+            padding: 32px 36px;
+            width: 720px;
+            max-width: 95vw;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.25);
+        }
+        .popup-box h2 { text-align: center; color: #1a237e; margin: 0 0 24px; font-size: 1.5em; }
+        .design-options { display: flex; gap: 18px; justify-content: center; }
+        .design-card {
+            flex: 1; border: 3px solid #ddd; border-radius: 12px;
+            padding: 16px 12px; cursor: pointer; text-align: center;
+            transition: 0.2s; background: #fafafa;
+        }
+        .design-card:hover { border-color: #1a237e; background: #e8eaf6; }
+        .design-card.selected { border-color: #1a237e; background: #e8eaf6; }
+        .design-card p { margin: 10px 0 0; font-weight: bold; font-size: 0.95em; color: #333; }
+        .design-card small { color: #777; font-size: 0.8em; }
+        .preview-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 28px);
+            grid-template-rows: repeat(3, 28px);
+            gap: 3px;
+            margin: 0 auto 8px;
+            width: fit-content;
+        }
+        .preview-cell {
+            width: 28px; height: 28px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        .pc-white { background: #ffffff; border-color: #ccc; }
+        .pc-black { background: #212121; border-color: #000; }
+        .pc-deco  { background: #ffffff; border-color: #ccc; }
+        .popup-confirm {
+            display: block; margin: 24px auto 0;
+            padding: 14px 48px; font-size: 1.2em; font-weight: bold;
+            background: #1a237e; color: white; border: none;
+            border-radius: 10px; cursor: pointer; flex: unset;
+        }
+        .popup-confirm:hover { background: #283593; }
+        .popup-cancel {
+            display: block; margin: 10px auto 0;
+            padding: 8px 32px; font-size: 0.95em; font-weight: bold;
+            background: transparent; color: #999; border: 1px solid #ddd;
+            border-radius: 8px; cursor: pointer; flex: unset;
+        }
     </style>
 </head>
 <body>
@@ -82,7 +141,7 @@
     </div>
 
     <div class="control-panel">
-        <button id="btn-start" onclick="sendCommand('start')">시작</button>
+        <button id="btn-start" onclick="openDesignPopup()">시작</button>
         <button id="btn-pause" onclick="sendCommand('pause')">비상정지</button>
         <button id="btn-reset" onclick="resetSystem()">초기화</button>
     </div>
@@ -113,17 +172,47 @@
                     <div style="width: 20px; height: 20px; background: #1a237e; border: 2px solid #0d124a; border-radius: 4px;"></div>
                     <span>완료</span>
                 </div>
-                <div style="display: flex; align-items: center; gap: 5px;">
-                    <div style="width: 20px; height: 20px; background: #e53935; border: 2px solid #b71c1c; border-radius: 4px;"></div>
-                    <span>빨강타일</span>
-                </div>
+
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #212121; border: 2px solid #000; border-radius: 4px;"></div>
                     <span>검정타일</span>
                 </div>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #ffffff; border: 2px solid #ccc; border-radius: 4px;"></div>
+                    <span>흰타일</span>
+                </div>
             </div>
         </div>
         <div id="three-container"></div>
+    </div>
+
+    <!-- 디자인 선택 팝업 -->
+    <div class="popup-overlay" id="design-popup">
+        <div class="popup-box">
+            <h2>타일 패턴 선택</h2>
+            <div class="design-options">
+                <!-- 1: 지그재그 RBRB -->
+                <div class="design-card" id="card-1" onclick="selectDesign(1)">
+                    <div class="preview-grid" id="preview-1"></div>
+                    <p>지그재그 ①</p>
+                    <small>RBRB 체커보드</small>
+                </div>
+                <!-- 2: 지그재그 RRRBBB -->
+                <div class="design-card" id="card-2" onclick="selectDesign(2)">
+                    <div class="preview-grid" id="preview-2"></div>
+                    <p>지그재그 ②</p>
+                    <small>RRR / BBB 줄무늬</small>
+                </div>
+                <!-- 3: 데코타일 -->
+                <div class="design-card" id="card-3" onclick="selectDesign(3)">
+                    <div class="preview-grid" id="preview-3"></div>
+                    <p>데코타일</p>
+                    <small>포인트 패턴</small>
+                </div>
+            </div>
+            <button class="popup-confirm" onclick="confirmDesign()">선택 완료</button>
+            <button class="popup-cancel" onclick="closePopup()">취소</button>
+        </div>
     </div>
 </div>
 
@@ -164,6 +253,23 @@
     // 각 타일의 고유 색상 (red/black) 추적 - null이면 기본 상태색 사용
     // 타일 색상이 지정되면 작업진행 상태(노란/초록/파란)와 무관하게 이 색상 유지
     const tileColors = new Array(TOTAL_TILES + 1).fill(null); // 1-indexed
+    let currentDesign = 0; // 현재 선택된 디자인 (1/2/3)
+
+    // 디자인별 3x3 타일 색상 (1-indexed, R=빨강 B=검정 W=흰색)
+    const DESIGN_COLORS = {
+        1: ['W','B','W','B','W','B','W','B','W'],   // WBWB 체커보드
+        2: ['W','W','W','B','B','B','W','W','W'],   // W줄/B줄/W줄
+        3: ['B','W','B','W','W','W','B','W','B'],   // 데코
+    };
+
+    function getTileColor(design, tileIdx) {
+        // tileIdx: 1~9
+        const pattern = DESIGN_COLORS[design];
+        if (!pattern) return null;
+        const c = pattern[tileIdx - 1];
+        if (c === 'B') return 0x212121;
+        return 0xffffff; // W = 흰색
+    }
 
     // -------------------------------------------------------
     // 2D 타일 그리드 생성 (9칸: 3행 3열)
@@ -208,7 +314,7 @@
     for (let i = 0; i < TOTAL_TILES; i++) {
         const mesh = new THREE.Mesh(
             tileGeom,
-            new THREE.MeshStandardMaterial({ color: 0xffffff })
+            new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
         );
         const row = Math.floor(i / COLS);
         const col = i % COLS;
@@ -225,7 +331,7 @@
     const tileStartZ = startZ - tileSize / 2;
     const padding = 0.05;
 
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x999999, transparent: true, opacity: 0.6 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x546e7a, transparent: true, opacity: 0.7 });
     const wallThickness = 0.2;
 
     // 뒤쪽 벽
@@ -252,13 +358,29 @@
     );
     scene.add(sideWall);
 
+    // 바닥 플랫폼 (타일 3x3 크기, 벽 높이 1/3)
+    const wallHeight = 2.5;
+    const platformH  = wallHeight / 3;
+    const platformW  = tileEndX - tileStartX;
+    const platformD  = tileEndZ - tileStartZ;
+    const platform = new THREE.Mesh(
+        new THREE.BoxGeometry(platformW, platformH, platformD),
+        new THREE.MeshStandardMaterial({ color: 0xfffff0, transparent: false })
+    );
+    platform.position.set(
+        (tileStartX + tileEndX) / 2,
+        -(platformH / 2),   // 타일(y=0) 바로 아래
+        (tileStartZ + tileEndZ) / 2
+    );
+    scene.add(platform);
+
     function animate() {
         requestAnimationFrame(animate);
         controls.update();
         renderer.render(scene, camera);
     }
     animate();
-    //
+
     // -------------------------------------------------------
     // Firebase: robot_status 실시간 수신
     // -------------------------------------------------------
@@ -273,25 +395,8 @@
 
         updateProcessStep(data.current_step || 0);
 
-        // --- red_tile: 타일 고유 색상이 빨간 타일 ---
-        if (data.red_tile !== undefined && data.red_tile !== null) {
-            const idx = parseInt(data.red_tile);
-            if (idx >= 1 && idx <= TOTAL_TILES) {
-                tileColors[idx] = 0xe53935;
-                tiles3D[idx - 1].material.color.setHex(0xe53935);
-                console.log(`[RED TILE] tile-${idx} -> red`);
-            }
-        }
-
-        // --- black_tile: 타일 고유 색상이 검정 타일 ---
-        if (data.black_tile !== undefined && data.black_tile !== null) {
-            const idx = parseInt(data.black_tile);
-            if (idx >= 1 && idx <= TOTAL_TILES) {
-                tileColors[idx] = 0x212121;
-                tiles3D[idx - 1].material.color.setHex(0x212121);
-                console.log(`[BLACK TILE] tile-${idx} -> black`);
-            }
-        }
+        // design 번호 업데이트
+        if (data.design) currentDesign = parseInt(data.design);
 
         if (!isStarted) return;
 
@@ -299,6 +404,14 @@
 
         if (currentJobs > prevCompletedJobs) {
             for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
+                // 완료된 타일에 디자인 색상 적용 (3D)
+                const color = getTileColor(currentDesign, i);
+                if (color !== null) {
+                    tileColors[i] = color;
+                    tiles3D[i - 1].material.color.setHex(color);
+                } else {
+                    tiles3D[i - 1].material.color.setHex(0xffffff);
+                }
                 startTileTimer(i, 120);
             }
         }
@@ -307,16 +420,9 @@
         const workingIdx = currentJobs + 1;
         if (workingIdx <= TOTAL_TILES) {
             const el = document.getElementById(`tile-${workingIdx}`);
-            const mesh = tiles3D[workingIdx - 1];
             if (el && !el.classList.contains('running') && !el.classList.contains('finished')) {
                 el.classList.add('working');
                 el.innerText = '작업중';
-                // 3D: 타일 고유 색상(red/black)이 있으면 유지, 없으면 노란색
-                if (mesh && tileColors[workingIdx] !== null) {
-                    mesh.material.color.setHex(tileColors[workingIdx]);
-                } else if (mesh) {
-                    mesh.material.color.setHex(0xffc107);
-                }
             }
         }
 
@@ -337,6 +443,69 @@
         }
     }
 
+
+    // -------------------------------------------------------
+    // 디자인 선택 팝업
+    // -------------------------------------------------------
+    // 3x3 패턴 정의 (R=빨강, B=검정, W=흰색)
+    const PATTERNS = {
+        1: ['W','B','W', 'B','W','B', 'W','B','W'],   // WBWB 체커보드
+        2: ['W','W','W', 'B','B','B', 'W','W','W'],   // W줄/B줄/W줄
+        3: ['B','W','B', 'W','W','W', 'B','W','B'],   // 데코: 테두리검정+중앙흰색
+    };
+
+    let selectedDesign = null;
+
+    function buildPreviews() {
+        [1, 2, 3].forEach(id => {
+            const grid = document.getElementById('preview-' + id);
+            grid.innerHTML = '';
+            PATTERNS[id].forEach(c => {
+                const cell = document.createElement('div');
+                cell.className = 'preview-cell ' +
+                    (c === 'B' ? 'pc-black' : '');
+                grid.appendChild(cell);
+            });
+        });
+    }
+    buildPreviews();
+
+    function openDesignPopup() {
+        selectedDesign = null;
+        [1,2,3].forEach(i => document.getElementById('card-'+i).classList.remove('selected'));
+        document.getElementById('design-popup').classList.add('show');
+    }
+
+    function closePopup() {
+        document.getElementById('design-popup').classList.remove('show');
+    }
+
+    function selectDesign(n) {
+        selectedDesign = n;
+        [1,2,3].forEach(i => document.getElementById('card-'+i).classList.remove('selected'));
+        document.getElementById('card-'+n).classList.add('selected');
+    }
+
+    function confirmDesign() {
+        if (!selectedDesign) { alert('패턴을 선택해주세요!'); return; }
+        closePopup();
+        // Firebase에 design 번호 발행
+        database.ref('robot_status').update({ design: selectedDesign });
+        database.ref('robot_command').set({ action: 'start', timestamp: Date.now() });
+        // 기존 start 로직
+        isStarted = true;
+        if (!timerInterval) startTimer();
+        const firstTile = document.getElementById('tile-1');
+        if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
+            firstTile.classList.add('working');
+            firstTile.innerText = '작업중';
+        }
+    }
+    window.openDesignPopup = openDesignPopup;
+    window.closePopup = closePopup;
+    window.selectDesign = selectDesign;
+    window.confirmDesign = confirmDesign;
+
     // -------------------------------------------------------
     // 버튼 커맨드
     // -------------------------------------------------------
@@ -348,13 +517,9 @@
             if (!timerInterval) startTimer();
 
             const firstTile = document.getElementById('tile-1');
-            const firstMesh = tiles3D[0];
             if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
                 firstTile.classList.add('working');
                 firstTile.innerText = '작업중';
-                if (firstMesh) {
-                    firstMesh.material.color.setHex(tileColors[1] !== null ? tileColors[1] : 0xffc107);
-                }
             }
         } else if (cmd === 'pause') {
             pauseTimer();
@@ -390,35 +555,41 @@
     // 초기화
     // -------------------------------------------------------
     function resetSystem() {
+        // 1. 로컬 상태 먼저 완전 초기화 (Firebase 리스너 발동 전에)
         pauseTimer();
         startTime = null;
         elapsedSeconds = 0;
         isStarted = false;
         prevCompletedJobs = 0;
+        currentDesign = 0;
         document.getElementById('timer').innerText = '00 : 00 : 00';
 
+        // 2. 타이머 전부 정지
+        for (let id in activeTimers) clearInterval(activeTimers[id]);
+        Object.keys(activeTimers).forEach(key => delete activeTimers[key]);
+
+        // 3. 2D 타일 UI 초기화
+        for (let i = 1; i <= TOTAL_TILES; i++) {
+            tileColors[i] = null;
+            const el = document.getElementById(`tile-${i}`);
+            if (el) { el.classList.remove('working', 'running', 'finished'); el.innerText = ''; }
+        }
+
+        // 4. 3D 타일 초기화
+        tiles3D.forEach(mesh => mesh.material.color.setHex(0xaaaaaa));
+        updateProcessStep(0);
+
+        // 5. Firebase 업데이트 (마지막에 - 리스너 발동해도 isStarted=false라 무시됨)
         database.ref('robot_status').update({
             completed_jobs: 0,
             working_tile: 0,
             current_step: 0,
             speed: 0,
             state: '대기',
-            red_tile: null,
-            black_tile: null
+            design: 0
         });
         database.ref('robot_command').set({ action: 'reset', timestamp: Date.now() });
 
-        for (let id in activeTimers) clearInterval(activeTimers[id]);
-        Object.keys(activeTimers).forEach(key => delete activeTimers[key]);
-
-        for (let i = 1; i <= TOTAL_TILES; i++) {
-            tileColors[i] = null; // 타일 고유 색상 초기화
-            const el = document.getElementById(`tile-${i}`);
-            if (el) { el.classList.remove('working', 'running', 'finished'); el.innerText = ''; }
-        }
-
-        tiles3D.forEach(mesh => mesh.material.color.setHex(0xffffff));
-        updateProcessStep(0);
         console.log('System reset completed!');
     }
     window.resetSystem = resetSystem;
@@ -434,10 +605,6 @@
 
         el.classList.remove('working');
         el.classList.add('running');
-        // 3D: 타일 고유 색상(red/black)이 있으면 유지, 없으면 초록색
-        if (mesh) {
-            mesh.material.color.setHex(tileColors[id] !== null ? tileColors[id] : 0x4caf50);
-        }
 
         activeTimers[id] = setInterval(() => {
             left--;
@@ -450,10 +617,6 @@
                 el.innerText = "완료";
                 el.classList.remove('running');
                 el.classList.add('finished');
-                // 3D: 타일 고유 색상(red/black)이 있으면 유지, 없으면 파란색
-                if (mesh) {
-                    mesh.material.color.setHex(tileColors[id] !== null ? tileColors[id] : 0x1a237e);
-                }
             }
         }, 1000);
     }

@@ -58,8 +58,9 @@ class FirebaseBridgeNode(Node):
         self.create_subscription(Int32,             "/robot/completed_jobs",       self._cb_completed_jobs,       10)
         self.create_subscription(Int32,             "/robot/speed",                self._cb_speed,                10)
         self.create_subscription(Int32,             "/robot/collision_sensitivity", self._cb_collision_sensitivity, 10)
+        self.create_subscription(Int32,             "/robot/design",                self._cb_design,                10)
 
-        self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, /robot/completed_jobs, /robot/speed, /robot/collision_sensitivity")
+        self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, /robot/completed_jobs, /robot/speed, /robot/collision_sensitivity, /robot/design")
         self.get_logger().info("Publishing: /robot/command")
         self.get_logger().info("Publishing: /robot/command")
 
@@ -104,6 +105,7 @@ class FirebaseBridgeNode(Node):
                                 "completed_jobs": 0,
                                 "working_tile":   0,
                                 "speed":          0,
+                                "design":         0,
                             })
                             self.get_logger().info("[RESET] Firebase robot_status 전체 초기화 완료")
             except Exception as e:
@@ -122,7 +124,6 @@ class FirebaseBridgeNode(Node):
     def _cb_completed_jobs(self, msg: Int32):
         self.ref.update({"completed_jobs": msg.data})
         self.get_logger().info(f"[COMPLETED] → Firebase: {msg.data}")
-#
 
     def _cb_speed(self, msg: Int32):
         self.ref.update({"speed": msg.data})
@@ -131,6 +132,10 @@ class FirebaseBridgeNode(Node):
     def _cb_collision_sensitivity(self, msg: Int32):
         self.ref.update({"collision_sensitivity": msg.data})
         self.get_logger().info(f"[COLLISION] → Firebase: {msg.data}")
+
+    def _cb_design(self, msg: Int32):
+        self.ref.update({"design": msg.data})
+        self.get_logger().info(f"[DESIGN] → Firebase: {msg.data}")
 
     def _cb_tcp(self, msg: Float32MultiArray):
         now = time.time()

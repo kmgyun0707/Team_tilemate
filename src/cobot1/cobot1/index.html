@@ -248,6 +248,10 @@
     }
     animate();
 
+    // 이전 상태 추적
+    let prevCompletedJobs = 0;
+    let isStarted = false;
+
     // Firebase 데이터 실시간 수신 및 업데이트
     database.ref('robot_status').on('value', (snapshot) => {
         const data = snapshot.val();
@@ -257,23 +261,35 @@
         document.getElementById('robot-state').innerText = data.state || "대기";
         document.getElementById('collision-sens').innerText = data.collision_sensitivity || 0;
         document.getElementById('job-count').innerText = data.completed_jobs || 0;
-        
+
         // 공정 단계 업데이트 (0이면 하이라이트 없음)
         updateProcessStep(data.current_step || 0);
-        
-        // 작업 중인 타일 노란색 표시
-        if(data.working_tile) {
-            const workingTile = document.getElementById(`tile-${data.working_tile}`);
-            const workingMesh = tiles3D[data.working_tile - 1];
-            if(workingTile && !workingTile.classList.contains('running') && !workingTile.classList.contains('finished')) {
-                workingTile.classList.add('working');
-                workingTile.innerText = '작업중';
-                if(workingMesh) workingMesh.material.color.setHex(0xffc107); // 노란색
+
+        // 시작 버튼 누르기 전엔 타일 색상 변경 안 함
+        if (!isStarted) return;
+
+        const currentJobs = data.completed_jobs || 0;
+
+        // completed_jobs가 늘었으면 해당 타일 초록+카운트다운
+        if (currentJobs > prevCompletedJobs) {
+            for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
+                startTileTimer(i, 120);
             }
         }
-        
-        // 작업 진행 시 타일 시각화 (초록색 - 마르는중)
-        if(data.completed_jobs) updateVisuals(data.completed_jobs);
+
+        // 현재 작업 중인 타일 = completed_jobs + 1 → 노란색
+        const workingIdx = currentJobs + 1;
+        if (workingIdx <= 45) {
+            const el = document.getElementById(`tile-${workingIdx}`);
+            const mesh = tiles3D[workingIdx - 1];
+            if (el && !el.classList.contains('running') && !el.classList.contains('finished')) {
+                el.classList.add('working');
+                el.innerText = '작업중';
+                if (mesh) mesh.material.color.setHex(0xffc107);
+            }
+        }
+
+        prevCompletedJobs = currentJobs;
     });
 
     function updateProcessStep(stepNumber) {
@@ -295,10 +311,19 @@
         // 시작 버튼을 누르면 타이머 시작 또는 재개
         if(cmd === 'start') {
             console.log('Start button clicked, attempting to start timer...');
+            isStarted = true;
             if(!timerInterval) {
                 startTimer();
             } else {
                 console.log('Timer already running');
+            }
+            // 시작 시 1번 타일 노란색으로
+            const firstTile = document.getElementById('tile-1');
+            const firstMesh = tiles3D[0];
+            if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
+                firstTile.classList.add('working');
+                firstTile.innerText = '작업중';
+                if (firstMesh) firstMesh.material.color.setHex(0xffc107);
             }
         }
         // 일시정지 버튼을 누르면 타이머 일시정지
@@ -367,6 +392,8 @@
     }
     startTime = null;
     elapsedSeconds = 0;
+    isStarted = false;
+    prevCompletedJobs = 0;
     document.getElementById('timer').innerText = '00 : 00 : 00';
     
     // 2. Firebase 데이터 초기화 (핵심: working_tile 추가)
@@ -414,12 +441,6 @@
     // 전역으로 함수 노출
     window.resetSystem = resetSystem;
     console.log('resetSystem function registered');
-
-    function updateVisuals(count) {
-        for (let i = 1; i <= count; i++) {
-            if (!activeTimers[i]) startTileTimer(i, 120);
-        }
-    }
 
     function startTileTimer(id, sec) {
         let left = sec;

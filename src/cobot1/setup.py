@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'fire=cobot1.firebase_bridge:main',
+            'no=cobot1.testno:main',
         ],
     },
 )

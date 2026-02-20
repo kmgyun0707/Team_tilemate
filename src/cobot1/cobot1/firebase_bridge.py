@@ -55,11 +55,12 @@ class FirebaseBridgeNode(Node):
         self.create_subscription(Int32,             "/robot/step",                self._cb_step,                10)
         self.create_subscription(String,            "/robot/state",               self._cb_state,               10)
         self.create_subscription(Float32MultiArray, "/robot/tcp",                 self._cb_tcp,                 10)
-        self.create_subscription(Int32,             "/robot/completed_jobs",      self._cb_completed_jobs,      10)
-        self.create_subscription(Int32,             "/robot/speed",               self._cb_speed,               10)
-        self.create_subscription(Int32,             "/robot/collision_sensitivity",self._cb_collision_sensitivity,10)
+        self.create_subscription(Int32,             "/robot/completed_jobs",       self._cb_completed_jobs,       10)
+        self.create_subscription(Int32,             "/robot/speed",                self._cb_speed,                10)
+        self.create_subscription(Int32,             "/robot/collision_sensitivity", self._cb_collision_sensitivity, 10)
 
         self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, /robot/completed_jobs, /robot/speed, /robot/collision_sensitivity")
+        self.get_logger().info("Publishing: /robot/command")
         self.get_logger().info("Publishing: /robot/command")
 
         # TCP throttle

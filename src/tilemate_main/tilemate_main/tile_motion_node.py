@@ -233,11 +233,9 @@ class TileMotionNode(Node):
         m_step.data = step
         m_state = String()
         m_state.data = state
-        if step == 4:
-            self.pub_step.publish(m_step)
-            self.pub_state.publish(m_state)
-            self._completed_jobs += 1
-            self._publish_completed_jobs()
+        
+        self.pub_step.publish(m_step)
+        self.pub_state.publish(m_state)
         self.get_logger().info(f"[STATUS] step={step} state='{state}'")
 
     def _publish_completed_jobs(self):
@@ -418,6 +416,11 @@ class TileMotionNode(Node):
             # movel(place_m4, vel=10, acc=10)
             # movel(place_m5, vel=10, acc=10)
             movel(place_tilt, vel=VELOCITY, acc=ACC)
+
+            # 1건 완료 처리 (job completed)
+            if not self._stop_soft:
+                self._completed_jobs += 1
+                self._publish_completed_jobs()
 
         self.get_logger().info("[TILE] Finish: Move to JReady")
         movej(JReady, vel=VELOCITY, acc=ACC)

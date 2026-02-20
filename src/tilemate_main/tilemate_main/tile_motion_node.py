@@ -202,10 +202,12 @@ class TileMotionNode(Node):
         self._running = False
 
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
-
+        self.pub_state = self.create_publisher(String, "/robot/state", 10)
+        self.pub_step = self.create_publisher(Int32, "/robot/step", 10 )
         # ✅ completed/jobs (픽앤플레이스 run_once 완료 누적)
         self.pub_completed_jobs = self.create_publisher(Int32, "/completed/jobs", 10)
         self._completed_jobs = 0
+        self._publish_init_state()
         self._publish_completed_jobs()
 
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
@@ -233,6 +235,14 @@ class TileMotionNode(Node):
         m.data = int(self._completed_jobs)
         self.pub_completed_jobs.publish(m)
         self.get_logger().info(f"[TILE] /completed/jobs={m.data}")
+
+    def _publish_init_state(self):
+        m_state = String()
+        m_state.data = "타일배치중"
+        m_step = Int32()
+        m_step.data = 4
+        self.pub_state.publish(m_state)
+        self.pub_step.publish(m_step)
 
     def _cb_run_once(self, msg: Int32):
         if self._running:

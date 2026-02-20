@@ -53,7 +53,7 @@ class ScraperMotionNode(Node):
 
         # pubs
         self.pub_status = self.create_publisher(String, "/scraper/status", 10)
-        self.pub_state  = self.create_publisher(String, "/scraper/state", 10)
+        self.pub_state  = self.create_publisher(String, "/robot/state", 10)
         self.pub_step   = self.create_publisher(Int32,  "/scraper/step", 10)
 
         # subs
@@ -67,6 +67,8 @@ class ScraperMotionNode(Node):
         self._set_scraper_status(self.STEP_PREPARE, "대기(run_once 기다리는 중)")
 
         self.get_logger().info("ScraperMotionNode ready: sub /scraper/run_once")
+
+
 
     # -----------------
     # init / helpers

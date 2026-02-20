@@ -31,9 +31,9 @@ CLOSE_W = 0.005
 # 지금은 Y만 누적해서 공급 위치를 아래로 내려가며 집는 시나리오
 PICK_DY_MM = 32.5   # g=0..3 => 0, 32.5, 65, 97.5
 
-PICK_ABOVE_BASE = [345, 13, 200, 12, -180, 102]
-PICK_DOWN_BASE  = [345, 13, 165, 168, -180, -102]
-PICK_MOVE_BASE  = [415, 13, 200, 168, -180, -102]
+PICK_ABOVE_BASE = [345, 13, 200+50, 12, -180, 102]
+PICK_DOWN_BASE  = [345, 13, 165+50, 168, -180, -102]
+PICK_MOVE_BASE  = [415, 13, 200+50, 168, -180, -102]
 
 # ----------------------------
 # PLACE (n,m) TILT 그리드 (너가 추가한 좌표)
@@ -60,25 +60,25 @@ PICK_MOVE_BASE  = [415, 13, 200, 168, -180, -102]
 # pitch 가정: 70mm (타일 60 + 여유 10)
 
 # X = 415 (5개)
-PLACE_TILT_BASE01 = [415, 175, 200, 103, 173, -163]
-PLACE_TILT_BASE02 = [415, 100, 200, 103, 173, -163]
-PLACE_TILT_BASE03 = [415,  40, 200, 103, 173, -163]
-PLACE_TILT_BASE04 = [415, -30, 200, 103, 173, -163]
-PLACE_TILT_BASE05 = [415,-100, 200, 103, 173, -163]
+PLACE_TILT_BASE01 = [415, 175, 200+50, 103, 173, -163]
+PLACE_TILT_BASE02 = [415, 100, 200+50, 103, 173, -163]
+PLACE_TILT_BASE03 = [415,  40, 200+50, 103, 173, -163]
+PLACE_TILT_BASE04 = [415, -30, 200+50, 103, 173, -163]
+PLACE_TILT_BASE05 = [415,-100, 200+50, 103, 173, -163]
 
 # X = 495 (5개)  <- BASE06을 여기 첫번째로 재배치
-PLACE_TILT_BASE06 = [485, 175, 200, 103, 173, -163]
-PLACE_TILT_BASE07 = [485, 100, 200, 103, 173, -163]
-PLACE_TILT_BASE08 = [485,  40, 200, 103, 173, -163]
-PLACE_TILT_BASE09 = [485, -30, 200, 103, 173, -163]
-PLACE_TILT_BASE10 = [485,-100, 200, 103, 173, -163]
+PLACE_TILT_BASE06 = [485, 175, 200+50, 103, 173, -163]
+PLACE_TILT_BASE07 = [485, 100, 200+50, 103, 173, -163]
+PLACE_TILT_BASE08 = [485,  40, 200+50, 103, 173, -163]
+PLACE_TILT_BASE09 = [485, -30, 200+50, 103, 173, -163]
+PLACE_TILT_BASE10 = [485,-100, 200+50, 103, 173, -163]
 
 # X = 575 (5개)
-PLACE_TILT_BASE11 = [575, 175, 200, 103, 173, -163]
-PLACE_TILT_BASE12 = [575, 100, 200, 103, 173, -163]
-PLACE_TILT_BASE13 = [575,  40, 200, 103, 173, -163]
-PLACE_TILT_BASE14 = [575, -30, 200, 103, 173, -163]
-PLACE_TILT_BASE15 = [575,-100, 200, 103, 173, -163]
+PLACE_TILT_BASE11 = [575, 175, 200+50, 103, 173, -163]
+PLACE_TILT_BASE12 = [575, 100, 200+50, 103, 173, -163]
+PLACE_TILT_BASE13 = [575,  40, 200+50, 103, 173, -163]
+PLACE_TILT_BASE14 = [575, -30, 200+50, 103, 173, -163]
+PLACE_TILT_BASE15 = [575,-100, 200+50, 103, 173, -163]
 
 
 PLACE_TILT_GRID = {
@@ -104,13 +104,13 @@ PLACE_PLAN_2x2 = [
 # - 여기서 RPY를 추출해서 각 단계별로 강제 적용한다.
 # - XYZ는 place_tilt 기반으로 상대 오프셋으로 만들고, RPY는 아래 기준의 RPY로 덮어쓴다.
 # ----------------------------
-PLACE_TILT_BASE  = [415, 175, 200, 103, 173, -163] # (n,m,offset)에서 타일 배치 접근 자세로 이동할 때의 기준 좌표 (위 그리드에서 하나 선택)
-PLACE_DOWN_BASE  = [415, 175, 170,  87, 125,  178] # (tilt에서 z만 30mm 내려간 위치, RPY는 down 기준으로 적용)
-PLACE_MOVE_BASE1 = [415, 175, 145,  87, 125,  178] # (꺽어 놓기용, 상황에 맞게 조절 필요)
-PLACE_MOVE_BASE2 = [415, 250, 140,  87, 125,  178] # (Y를 좀 빼서 슬라이드할 때 뒤로 빠지도록, 상황에 맞게 조절 필요)
-PLACE_MOVE_BASE3 = [415, 250, 130,  87, 125,  178] # (조금더 하강용, 상황에 맞게 조절 필요)
-PLACE_MOVE_BASE4 = [415, 250, 130,  87, 125,  178] # 후퇴할 때는 Y를 크게 빼서 뒤로 빠지도록 (250은 임의값, 상황에 맞게 조절 필요)
-PLACE_MOVE_BASE5 = [415, 150, 140,  87, 125,  178] # (조금더 후 후퇴용, 상황에 맞게 조절 필요)
+PLACE_TILT_BASE  = [415, 175, 200+50, 103, 173, -163] # (n,m,offset)에서 타일 배치 접근 자세로 이동할 때의 기준 좌표 (위 그리드에서 하나 선택)
+PLACE_DOWN_BASE  = [415, 175, 170+50,  87, 125,  178] # (tilt에서 z만 30mm 내려간 위치, RPY는 down 기준으로 적용)
+PLACE_MOVE_BASE1 = [415, 175, 145+50,  87, 125,  178] # (꺽어 놓기용, 상황에 맞게 조절 필요)
+PLACE_MOVE_BASE2 = [415, 250, 140+50,  87, 125,  178] # (Y를 좀 빼서 슬라이드할 때 뒤로 빠지도록, 상황에 맞게 조절 필요)
+PLACE_MOVE_BASE3 = [415, 250, 130+50,  87, 125,  178] # (조금더 하강용, 상황에 맞게 조절 필요)
+PLACE_MOVE_BASE4 = [415, 250, 130+50,  87, 125,  178] # 후퇴할 때는 Y를 크게 빼서 뒤로 빠지도록 (250은 임의값, 상황에 맞게 조절 필요)
+PLACE_MOVE_BASE5 = [415, 150, 140+50,  87, 125,  178] # (조금더 후 후퇴용, 상황에 맞게 조절 필요)
 
 # ----------------------------
 # PLACE 상대 오프셋(tilt 기준)  ※ "XYZ(mm)"만 사용해야 함
@@ -203,10 +203,11 @@ class TileMotionNode(Node):
         self._running = False
 
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
-        self.pub_state = self.create_publisher(String, "/tile/state", 10)
+        self.pub_state = self.create_publisher(String, "/robot/state", 10)
         self.pub_step  = self.create_publisher(Int32,  "/tile/step", 10)
         self.pub_completed_jobs = self.create_publisher(Int32, "/tile/completed_jobs", 10)
         self._completed_jobs = 0
+        
         #
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
         self.create_subscription(Bool,  "/task/pause", self._cb_pause, 10)
@@ -228,6 +229,8 @@ class TileMotionNode(Node):
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
         time.sleep(1.0)
 
+
+
     def _set_tile_status(self, step: int, state: str):
         m_step = Int32()
         m_step.data = step
@@ -243,14 +246,6 @@ class TileMotionNode(Node):
         m.data = self._completed_jobs
         self.pub_completed_jobs.publish(m)
         self.get_logger().info(f"[TILE] /completed/jobs={m.data}")
-
-    def _publish_init_state(self):
-        m_state = String()
-        m_state.data = "타일배치중"
-        m_step = Int32()
-        m_step.data = 4
-        self.pub_state.publish(m_state)
-        self.pub_step.publish(m_step)
 
     def _cb_run_once(self, msg: Int32):
         if self._running:

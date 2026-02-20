@@ -50,6 +50,9 @@ class TaskManagerNode(Node):
         self.create_subscription(String, "/robot/command", self._cb_cmd, 10)
         self.create_subscription(String, "/scraper/status", self._cb_scraper_status, 10)
         self.create_subscription(String, "/tile/status", self._cb_tile_status, 10)
+        # ✅ 각 노드 step 구독
+        self.create_subscription(Int32, "/scraper/step", self._cb_scraper_step, 10)
+        self.create_subscription(Int32, "/tile/step", self._cb_tile_step, 10)
 
         self.get_logger().info("TaskManagerNode ready")
 
@@ -89,8 +92,6 @@ class TaskManagerNode(Node):
         self.pub_scraper.publish(m)
         self.get_logger().info(f"[TASK] start SCRAPER token={tok}")
 
-        # 2) glue spread (세부 단계가 필요하면 scraper가 status를 더 잘게 내도록 확장)
-        self._set_step(self.STEP_GLUE_SPREAD)
 
     def _start_tile(self, tok: int):
         """scraper 완료 후 tile 시작 (동일 token 사용)"""
@@ -103,9 +104,6 @@ class TaskManagerNode(Node):
         m.data = tok
         self.pub_tile.publish(m)
         self.get_logger().info(f"[TASK] start TILE token={tok}")
-
-        # 4) tile place
-        self._set_step(self.STEP_TILE_PLACE)
 
     def _finish_ok(self):
         """정상 완료"""
@@ -211,6 +209,49 @@ class TaskManagerNode(Node):
         elif state == "error":
             self.get_logger().error(f"[TASK] tile error token={tok}: {emsg}")
             self._finish_abort()
+
+    # -----------------
+    # step callbacks
+    # -----------------
+    def _cb_scraper_step(self, msg: Int32):
+        """
+        ScraperMotionNode STEP:
+          0 PREPARE, 1 GRIPPING, 2 COATING, 3 FINISH
+        -> Task step:
+          1,2로만 반영 (SCRAPER phase일 때만)
+        """
+        if self._phase != "SCRAPER":
+            return
+
+        s = int(msg.data)
+        if s == 1:       # GRIPPING
+            self._set_step(self.STEP_GLUE_PICK)
+        elif s == 2:     # COATING
+            self._set_step(self.STEP_GLUE_SPREAD)
+        else:
+            # 0,3은 굳이 robot/step을 바꾸지 않음
+            pass
+
+    def _cb_tile_step(self, msg: Int32):
+        """
+        TileMotionNode /tile/step:
+          3 TILE_PICKING
+          4 TILE_PLACING
+          5 DONE
+        -> Task step:
+          3,4(그리고 필요하면 5) 반영 (TILE phase일 때만)
+        """
+        if self._phase != "TILE":
+            return
+
+        s = int(msg.data)
+        if s == 3:
+            self._set_step(self.STEP_TILE_PICK)
+        elif s == 4:
+            self._set_step(self.STEP_TILE_PLACE)
+        elif s == 5:
+            # 선택: tile이 내부적으로 완료 step=5를 내면 즉시 FINISHED로
+            self._set_step(self.STEP_FINISHED)
 
 
 def main(args=None):

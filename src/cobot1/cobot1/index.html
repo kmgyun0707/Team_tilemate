@@ -28,28 +28,34 @@
         .step { font-weight: bold; color: #999; font-size: 1.1em; padding: 5px 15px; border-radius: 20px; }
         .step.active { background-color: #ff0000; color: #ffffff !important; box-shadow: 0 0 10px rgba(255,0,0,0.5); }
 
-        .bottom-section { display: flex; gap: 20px; align-items: flex-start; }
+        .bottom-section { display: flex; gap: 20px; align-items: stretch; }
         
-        /* 3열 4행 그리드 */
+        /* 3x3 그리드 */
+        .tile-grid-wrapper {
+            flex: 1.5;
+            display: flex;
+            flex-direction: column;
+        }
         .tile-grid { 
-            flex: 1.5; 
+            flex: 1;
             display: grid; 
-            grid-template-columns: repeat(4, 1fr);  /* 4열 */
-            gap: 5px; 
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px; 
             background: #e9ecef; 
-            padding: 10px; 
+            padding: 15px; 
             border-radius: 12px; 
-            border: 1px solid #ccc; 
+            border: 1px solid #ccc;
+            align-content: center;
         }
         .tile { 
-            aspect-ratio: 1 / 1; 
+            aspect-ratio: 1 / 1;
             background-color: #ffffff; 
             border: 2px solid #ddd; 
             border-radius: 6px; 
             display: flex; 
             align-items: center; 
             justify-content: center; 
-            font-size: 0.9em; 
+            font-size: 1.05em; 
             font-weight: bold; 
             color: #555; 
             transition: all 0.4s ease; 
@@ -69,7 +75,7 @@
 
     <div class="info-grid">
         <div id="timer-container">타일링 시간: <span id="timer">00 : 00 : 00</span></div>
-        <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">12</span></div>
+        <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">9</span></div>
         <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0</span>%</div>
         <div class="info-item">충돌민감도: <span id="collision-sens">0</span></div>
         <div class="info-item" style="text-align: right;">상태: <span id="robot-state">대기</span></div>
@@ -92,9 +98,9 @@
     </div>
 
     <div class="bottom-section">
-        <div style="flex: 1.5;">
+        <div class="tile-grid-wrapper">
             <div class="tile-grid" id="tile-map"></div>
-            <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em;">
+            <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em; flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #ffc107; border: 2px solid #ff9800; border-radius: 4px;"></div>
                     <span>작업중</span>
@@ -107,6 +113,14 @@
                     <div style="width: 20px; height: 20px; background: #1a237e; border: 2px solid #0d124a; border-radius: 4px;"></div>
                     <span>완료</span>
                 </div>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #e53935; border: 2px solid #b71c1c; border-radius: 4px;"></div>
+                    <span>빨강타일</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #212121; border: 2px solid #000; border-radius: 4px;"></div>
+                    <span>검정타일</span>
+                </div>
             </div>
         </div>
         <div id="three-container"></div>
@@ -117,8 +131,6 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
 
 <script>
-    console.log('Script loading started...');
-    
     let database;
     
     const firebaseConfig = {
@@ -139,76 +151,87 @@
         console.error('Firebase initialization error:', error);
     }
 
-    const TOTAL_TILES = 12; // 3행 4열
+    const TOTAL_TILES = 9; // 3x3
+    const COLS = 3;
+    const ROWS = 3;
 
     let timerInterval = null;
     let startTime = null;
     let elapsedSeconds = 0;
+    let prevCompletedJobs = 0;
+    let isStarted = false;
 
-    // 2D 타일 그리드 생성 (12칸: 3행 4열)
+    // 각 타일의 고유 색상 (red/black) 추적 - null이면 기본 상태색 사용
+    // 타일 색상이 지정되면 작업진행 상태(노란/초록/파란)와 무관하게 이 색상 유지
+    const tileColors = new Array(TOTAL_TILES + 1).fill(null); // 1-indexed
+
+    // -------------------------------------------------------
+    // 2D 타일 그리드 생성 (9칸: 3행 3열)
+    // -------------------------------------------------------
     const tileMap = document.getElementById('tile-map');
     const activeTimers = {};
     for (let i = 1; i <= TOTAL_TILES; i++) {
         const tile = document.createElement('div');
         tile.classList.add('tile');
         tile.id = `tile-${i}`;
-        tile.innerText = "";
         tileMap.appendChild(tile);
     }
 
+    // -------------------------------------------------------
     // Three.js 3D 설정
+    // -------------------------------------------------------
     const container = document.getElementById('three-container');
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf0f2f5);
 
     const camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.1, 1000);
-    camera.position.set(6, 6, 6);
+    camera.position.set(5, 5, 5);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    
+
     scene.add(new THREE.AmbientLight(0xffffff, 0.8));
     const light = new THREE.DirectionalLight(0xffffff, 0.5);
     light.position.set(10, 20, 10);
     scene.add(light);
 
-    // 3D 타일 배열 생성 (3행 4열 = 12칸)
+    // 3D 타일 생성 (3x3)
     const tiles3D = [];
     const tileGeom = new THREE.BoxGeometry(0.8, 0.1, 0.8);
     const tileGap = 0.9;
-    const COLS = 4;
-    const ROWS = 3;
-    const startX = -((COLS - 1) * tileGap) / 2;  // 중앙 정렬
+    const startX = -((COLS - 1) * tileGap) / 2;
     const startZ = -((ROWS - 1) * tileGap) / 2;
-    
+
     for (let i = 0; i < TOTAL_TILES; i++) {
-        const mesh = new THREE.Mesh(tileGeom, new THREE.MeshStandardMaterial({ color: 0xffffff }));
+        const mesh = new THREE.Mesh(
+            tileGeom,
+            new THREE.MeshStandardMaterial({ color: 0xffffff })
+        );
         const row = Math.floor(i / COLS);
         const col = i % COLS;
         mesh.position.set(startX + col * tileGap, 0.05, startZ + row * tileGap);
         scene.add(mesh);
         tiles3D.push(mesh);
     }
-    
+
     // 벽 위치 계산
     const tileSize = 0.8;
-    const tileEndX  = startX + (COLS - 1) * tileGap + tileSize / 2;
+    const tileEndX   = startX + (COLS - 1) * tileGap + tileSize / 2;
     const tileStartX = startX - tileSize / 2;
-    const tileEndZ  = startZ + (ROWS - 1) * tileGap + tileSize / 2;
+    const tileEndZ   = startZ + (ROWS - 1) * tileGap + tileSize / 2;
     const tileStartZ = startZ - tileSize / 2;
     const padding = 0.05;
 
-    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x999999, transparent: true, opacity: 0.6 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x999999, transparent: true, opacity: 0.6 });
     const wallThickness = 0.2;
-    
+
     // 뒤쪽 벽
-    const backWallWidth = tileEndX - tileStartX;
     const backWall = new THREE.Mesh(
-        new THREE.BoxGeometry(backWallWidth, 2.5, wallThickness),
-        wallMaterial
+        new THREE.BoxGeometry(tileEndX - tileStartX, 2.5, wallThickness),
+        wallMat
     );
     backWall.position.set(
         (tileStartX + tileEndX) / 2,
@@ -218,10 +241,9 @@
     scene.add(backWall);
 
     // 왼쪽 벽
-    const sideWallDepth = tileEndZ - tileStartZ;
     const sideWall = new THREE.Mesh(
-        new THREE.BoxGeometry(wallThickness, 2.5, sideWallDepth),
-        wallMaterial
+        new THREE.BoxGeometry(wallThickness, 2.5, tileEndZ - tileStartZ),
+        wallMat
     );
     sideWall.position.set(
         tileStartX - padding - wallThickness / 2,
@@ -237,20 +259,39 @@
     }
     animate();
 
-    let prevCompletedJobs = 0;
-    let isStarted = false;
-
-    // Firebase 실시간 수신
+    // -------------------------------------------------------
+    // Firebase: robot_status 실시간 수신
+    // -------------------------------------------------------
     database.ref('robot_status').on('value', (snapshot) => {
         const data = snapshot.val();
-        if(!data) return;
+        if (!data) return;
 
-        document.getElementById('robot-speed').innerText = data.speed || 0;
-        document.getElementById('robot-state').innerText = data.state || "대기";
-        document.getElementById('collision-sens').innerText = data.collision_sensitivity || 0;
-        document.getElementById('job-count').innerText = data.completed_jobs || 0;
+        document.getElementById('robot-speed').innerText     = data.speed || 0;
+        document.getElementById('robot-state').innerText     = data.state || "대기";
+        document.getElementById('collision-sens').innerText  = data.collision_sensitivity || 0;
+        document.getElementById('job-count').innerText       = data.completed_jobs || 0;
 
         updateProcessStep(data.current_step || 0);
+
+        // --- red_tile: 타일 고유 색상이 빨간 타일 ---
+        if (data.red_tile !== undefined && data.red_tile !== null) {
+            const idx = parseInt(data.red_tile);
+            if (idx >= 1 && idx <= TOTAL_TILES) {
+                tileColors[idx] = 0xe53935;
+                tiles3D[idx - 1].material.color.setHex(0xe53935);
+                console.log(`[RED TILE] tile-${idx} -> red`);
+            }
+        }
+
+        // --- black_tile: 타일 고유 색상이 검정 타일 ---
+        if (data.black_tile !== undefined && data.black_tile !== null) {
+            const idx = parseInt(data.black_tile);
+            if (idx >= 1 && idx <= TOTAL_TILES) {
+                tileColors[idx] = 0x212121;
+                tiles3D[idx - 1].material.color.setHex(0x212121);
+                console.log(`[BLACK TILE] tile-${idx} -> black`);
+            }
+        }
 
         if (!isStarted) return;
 
@@ -262,6 +303,7 @@
             }
         }
 
+        // 현재 작업 중인 타일 노란색 (2D만)
         const workingIdx = currentJobs + 1;
         if (workingIdx <= TOTAL_TILES) {
             const el = document.getElementById(`tile-${workingIdx}`);
@@ -269,51 +311,63 @@
             if (el && !el.classList.contains('running') && !el.classList.contains('finished')) {
                 el.classList.add('working');
                 el.innerText = '작업중';
-                if (mesh) mesh.material.color.setHex(0xffc107);
+                // 3D: 타일 고유 색상(red/black)이 있으면 유지, 없으면 노란색
+                if (mesh && tileColors[workingIdx] !== null) {
+                    mesh.material.color.setHex(tileColors[workingIdx]);
+                } else if (mesh) {
+                    mesh.material.color.setHex(0xffc107);
+                }
             }
         }
 
         prevCompletedJobs = currentJobs;
     });
 
+    // -------------------------------------------------------
+    // 공정 단계 업데이트
+    // -------------------------------------------------------
     function updateProcessStep(stepNumber) {
-        for(let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= 4; i++) {
             const el = document.getElementById('step' + i);
-            if(el) el.classList.remove('active');
+            if (el) el.classList.remove('active');
         }
-        if(stepNumber > 0) {
-            const current = document.getElementById('step' + stepNumber);
-            if(current) current.classList.add('active');
+        if (stepNumber > 0 && stepNumber <= 4) {
+            const el = document.getElementById('step' + stepNumber);
+            if (el) el.classList.add('active');
         }
     }
 
+    // -------------------------------------------------------
+    // 버튼 커맨드
+    // -------------------------------------------------------
     function sendCommand(cmd) {
         database.ref('robot_command').set({ action: cmd, timestamp: Date.now() });
-        
-        if(cmd === 'start') {
+
+        if (cmd === 'start') {
             isStarted = true;
-            if(!timerInterval) startTimer();
+            if (!timerInterval) startTimer();
 
             const firstTile = document.getElementById('tile-1');
             const firstMesh = tiles3D[0];
             if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
                 firstTile.classList.add('working');
                 firstTile.innerText = '작업중';
-                if (firstMesh) firstMesh.material.color.setHex(0xffc107);
+                if (firstMesh) {
+                    firstMesh.material.color.setHex(tileColors[1] !== null ? tileColors[1] : 0xffc107);
+                }
             }
-        } else if(cmd === 'pause') {
+        } else if (cmd === 'pause') {
             pauseTimer();
         }
     }
     window.sendCommand = sendCommand;
 
+    // -------------------------------------------------------
+    // 타이머
+    // -------------------------------------------------------
     function startTimer() {
-        if(timerInterval) return;
-        if(!startTime) {
-            startTime = Date.now() - (elapsedSeconds * 1000);
-        } else {
-            startTime = Date.now() - (elapsedSeconds * 1000);
-        }
+        if (timerInterval) return;
+        startTime = Date.now() - (elapsedSeconds * 1000);
         timerInterval = setInterval(() => {
             elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
             updateTimerDisplay();
@@ -321,22 +375,22 @@
     }
 
     function updateTimerDisplay() {
-        const hours   = Math.floor(elapsedSeconds / 3600);
-        const minutes = Math.floor((elapsedSeconds % 3600) / 60);
-        const seconds = elapsedSeconds % 60;
+        const h = Math.floor(elapsedSeconds / 3600);
+        const m = Math.floor((elapsedSeconds % 3600) / 60);
+        const s = elapsedSeconds % 60;
         document.getElementById('timer').innerText =
-            `${String(hours).padStart(2,'0')} : ${String(minutes).padStart(2,'0')} : ${String(seconds).padStart(2,'0')}`;
+            `${String(h).padStart(2,'0')} : ${String(m).padStart(2,'0')} : ${String(s).padStart(2,'0')}`;
     }
 
     function pauseTimer() {
-        if(timerInterval) {
-            clearInterval(timerInterval);
-            timerInterval = null;
-        }
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
     }
 
+    // -------------------------------------------------------
+    // 초기화
+    // -------------------------------------------------------
     function resetSystem() {
-        if(timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        pauseTimer();
         startTime = null;
         elapsedSeconds = 0;
         isStarted = false;
@@ -348,45 +402,58 @@
             working_tile: 0,
             current_step: 0,
             speed: 0,
-            state: '대기'
+            state: '대기',
+            red_tile: null,
+            black_tile: null
         });
         database.ref('robot_command').set({ action: 'reset', timestamp: Date.now() });
 
-        for(let id in activeTimers) clearInterval(activeTimers[id]);
+        for (let id in activeTimers) clearInterval(activeTimers[id]);
         Object.keys(activeTimers).forEach(key => delete activeTimers[key]);
 
-        for(let i = 1; i <= TOTAL_TILES; i++) {
+        for (let i = 1; i <= TOTAL_TILES; i++) {
+            tileColors[i] = null; // 타일 고유 색상 초기화
             const el = document.getElementById(`tile-${i}`);
-            if(el) { el.classList.remove('working', 'running', 'finished'); el.innerText = ''; }
+            if (el) { el.classList.remove('working', 'running', 'finished'); el.innerText = ''; }
         }
 
         tiles3D.forEach(mesh => mesh.material.color.setHex(0xffffff));
         updateProcessStep(0);
+        console.log('System reset completed!');
     }
     window.resetSystem = resetSystem;
 
+    // -------------------------------------------------------
+    // 타일 타이머 (마르는 중 → 완료)
+    // -------------------------------------------------------
     function startTileTimer(id, sec) {
         let left = sec;
         const el = document.getElementById(`tile-${id}`);
         const mesh = tiles3D[id - 1];
-        if(!el || el.classList.contains('finished')) return;
+        if (!el || el.classList.contains('finished')) return;
 
         el.classList.remove('working');
         el.classList.add('running');
-        if(mesh) mesh.material.color.setHex(0x4caf50);
+        // 3D: 타일 고유 색상(red/black)이 있으면 유지, 없으면 초록색
+        if (mesh) {
+            mesh.material.color.setHex(tileColors[id] !== null ? tileColors[id] : 0x4caf50);
+        }
 
         activeTimers[id] = setInterval(() => {
             left--;
             const m = Math.floor(left / 60);
             const s = left % 60;
-            el.innerText = `${m}:${s < 10 ? '0'+s : s}`;
-            
-            if(left <= 0) {
+            el.innerText = `${m}:${s < 10 ? '0' + s : s}`;
+
+            if (left <= 0) {
                 clearInterval(activeTimers[id]);
                 el.innerText = "완료";
                 el.classList.remove('running');
                 el.classList.add('finished');
-                if(mesh) mesh.material.color.setHex(0x1a237e);
+                // 3D: 타일 고유 색상(red/black)이 있으면 유지, 없으면 파란색
+                if (mesh) {
+                    mesh.material.color.setHex(tileColors[id] !== null ? tileColors[id] : 0x1a237e);
+                }
             }
         }, 1000);
     }

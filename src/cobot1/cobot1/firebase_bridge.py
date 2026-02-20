@@ -122,6 +122,7 @@ class FirebaseBridgeNode(Node):
     def _cb_completed_jobs(self, msg: Int32):
         self.ref.update({"completed_jobs": msg.data})
         self.get_logger().info(f"[COMPLETED] → Firebase: {msg.data}")
+#
 
     def _cb_speed(self, msg: Int32):
         self.ref.update({"speed": msg.data})

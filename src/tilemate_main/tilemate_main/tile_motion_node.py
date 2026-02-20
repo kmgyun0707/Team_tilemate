@@ -205,7 +205,7 @@ class TileMotionNode(Node):
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
         self.pub_state = self.create_publisher(String, "/robot/state", 10)
         self.pub_step  = self.create_publisher(Int32,  "/tile/step", 10)
-        self.pub_completed_jobs = self.create_publisher(Int32, "/tile/completed_jobs", 10)
+        self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10) # 타일 각각 작업 완료시 퍼블리셔
         self._completed_jobs = 0
         
         #

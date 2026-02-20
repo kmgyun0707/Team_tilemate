@@ -193,14 +193,14 @@ class ScraperMotionNode(Node):
         pos9 = posx([528.40, -34.13, 160.68, 93.23, 148.62, -179.15])
 
         # 준비
-        self._set_scraper_status(self.STEP_PREPARE, "파지 준비전")
+        self._set_scraper_status(self.STEP_PREPARE, "스크래퍼 파지 준비")
         movej(JReady, vel=self.cfg.vel, acc=self.cfg.acc)
         set_gripper(0.060)
         time.sleep(2.0)
         if not self._checkpoint(): return False
 
         # 파지
-        self._set_scraper_status(self.STEP_GRIPPING, "파지중")
+        self._set_scraper_status(self.STEP_GRIPPING, "스크래퍼 파지중")
         movel(pre, vel=60, acc=60); time.sleep(1.0)
         if not self._checkpoint(): return False
         movel(grasp, vel=60, acc=60); time.sleep(1.0)
@@ -217,7 +217,7 @@ class ScraperMotionNode(Node):
         if not self._checkpoint(): return False
 
         # 도포
-        self._set_scraper_status(self.STEP_COATING, "도포중")
+        self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
         movel(tilt_right, vel=40, acc=40); time.sleep(1.0)
         if not self._checkpoint(): return False
         movel(pos7, vel=40, acc=40); time.sleep(1.0)
@@ -228,7 +228,7 @@ class ScraperMotionNode(Node):
         if not self._checkpoint(): return False
 
         # 반납
-        self._set_scraper_status(self.STEP_FINISH, "끝")
+        self._set_scraper_status(self.STEP_FINISH, "접착제 도포 끝")
         movel(pre, vel=60, acc=60); time.sleep(1.0)
         if not self._checkpoint(): return False
         movel(place, vel=60, acc=60); time.sleep(1.0)

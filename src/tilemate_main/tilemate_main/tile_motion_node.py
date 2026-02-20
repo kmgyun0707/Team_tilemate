@@ -233,8 +233,8 @@ class TileMotionNode(Node):
         m_step.data = step
         m_state = String()
         m_state.data = state
-        self.pub_robot_step.publish(m_step)
-        self.pub_robot_state.publish(m_state)
+        self.pub_step.publish(m_step)
+        self.pub_state.publish(m_state)
         self.get_logger().info(f"[STATUS] step={step} state='{state}'")
 
     def _publish_completed_jobs(self):

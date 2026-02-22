@@ -34,6 +34,7 @@ setup(
             'scraper_motion_node = tilemate_main.scraper_motion_node:main',
             'tile_motion_node = tilemate_main.tile_motion_node:main',
             'command_node = tilemate_main.command_node:main',
+            'tilt_test = tilemate_main.tcp_tool_tilt_test_260222:main',
         ],
     },
 )

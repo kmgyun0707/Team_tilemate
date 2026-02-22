@@ -31,7 +31,7 @@ CLOSE_W = 0.005
 # 지금은 Y만 누적해서 공급 위치를 아래로 내려가며 집는 시나리오
 PICK_DY_MM = 32.5   # g=0..3 => 0, 32.5, 65, 97.5
 
-PICK_ABOVE_BASE = [345, 13, 200+50, 12, -180, 102]
+PICK_ABOVE_BASE = [345, 13, 200+50, 12, -180, 102] 
 PICK_DOWN_BASE  = [345, 13, 165+50, 168, -180, -102]
 PICK_MOVE_BASE  = [415, 13, 200+50, 168, -180, -102]
 
@@ -124,7 +124,6 @@ REL_M3   = (0.0, -10.0, -65.0)   # 175 -> 155, 200 -> 135
 REL_M4   = (0.0, -15.0, -65.0)   # 175 -> 160, 200 -> 135
 REL_M5   = (0.0,  -5.0, -65.0)   # 175 -> 170, 200 -> 135
 
-
 def add_xy_offset(posx, dx_mm: float, dy_mm: float):
     p = posx[:]
     p[0] += dx_mm
@@ -163,9 +162,6 @@ def get_place_tilt_nm(n: int, m: int, offset: int = 1):
     return base
 
 
-
-
-
 # ============================================================
 # Gripper thin client (기존 gripper_node 사용)
 # ============================================================
@@ -181,7 +177,6 @@ class _GripperClient:
         msg.data = float(width_m)
         self._pub.publish(msg)
         self._node.get_logger().info(f"[GRIPPER->CMD] width_m={msg.data:.4f}")
-
 
 # ============================================================
 # TileMotionNode

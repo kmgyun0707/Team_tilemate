@@ -110,6 +110,8 @@ class ScraperMotionNode(Node):
         if self._stop_soft:
             return False
         return True
+    
+
 
     # -----------------
     # callbacks
@@ -172,25 +174,57 @@ class ScraperMotionNode(Node):
     # DSR motions
     # -----------------
     def _perform_cycle(self) -> bool:
-        from DSR_ROBOT2 import posx, posj, movej, movel
+        from DSR_ROBOT2 import (
+            posx,
+            posj,
+            movej,
+            movel,
+            amovej,
+            amovel,
+            wait,
+            get_current_posx,
+            add_tcp,
+            get_tcp,
+            set_tcp,
+            set_robot_mode,
+            DR_TOOL,
+            DR_BASE,
+            DR_WORLD,
+            ROBOT_MODE_MANUAL,
+            ROBOT_MODE_AUTONOMOUS,
+        )
 
         def set_gripper(w: float):
             self.gripper.set_width(w)
             time.sleep(0.05)
 
+        # 베이스 좌표계 기준 상대 좌표 이동
+        def move_relative(dx:float,dy:float,dz:float): 
+            cur, _ = get_current_posx(DR_BASE)   # cur: [x,y,z,rx,ry,rz] 형태
+            target = [cur[0] +dx, cur[1]+dy, cur[2]+dz, cur[3], cur[4], cur[5]]
+            movel(posx(target), ref=DR_BASE, vel=30, acc=30)
+            time.sleep(0.5)
+
+        #왕복하며 펴바르기
+        def do_stroke():  
+            movel(posx([0,0,0,0,-20,0]), ref=DR_TOOL, time=5.0); time.sleep(0.2)
+            move_relative(0.0,  120.0, 0.0)   # +Y 100
+            time.sleep(0.2)
+
+            movel(posx([0,0,0,0,40,0]), ref=DR_TOOL, time=5.0); time.sleep(0.2)
+            move_relative(0.0, -190.0, 0.0)   # -Y 180
+            time.sleep(0.2)
+
+            movel(posx([0,0,0,0,-20,0]), ref=DR_TOOL, time=5.0); time.sleep(0.2)
+            
         JReady = [0, 0, 90, 0, 90, 0]
 
-        pre   = posx([644.119, 75.068, 216.4523,  52.0011, 179.0943,  52.3476])
-        grasp = posx([644.119, 75.068, 156.9518, 122.9743, 179.7988, 123.1659])
-        place = posx([644.119, 75.068, 186.9518, 122.9743, 179.7988, 123.1659])
+        pre_grasp   = posx([608.63, 69.05, 210.0,  52.0011, 179.0943,  52.3476])
+        grasp = posx([608.63, 69.05, 173.76, 52.0011, 179.0943,  52.3476])
 
-        mid = posx([480.8698, 68.9976, 167.2608, 59.9196, 179.1564, 60.5511])
-        p5 = posj([6.65, 16.37, 75.84, 0.56, 87.29, 95.63])
-
-        tilt_right = posx([465.40, -34.13, 160.68, 92.35, -142.05, 179.91])
-        pos7 = posx([465.40, 250.13, 160.68, 92.35, -142.05, 179.91])
-        tilt_left = posx([462.86, 274.11, 160.68, 93.23, 148.62, -179.15])
-        pos9 = posx([528.40, -34.13, 160.68, 93.23, 148.62, -179.15])
+        pre_mid = posx([480.8698, 91.12, 210.0, 59.9196, 179.1564, 60.5511])
+        mid = posx([480.8698, 91.12, 190.0, 59.9196, 179.1564, 60.5511])
+        rotate = posj([6.671, 16.319, 72.358, 0.566, 90.818, 95.63])
 
         # 준비
         self._set_scraper_status(self.STEP_PREPARE, "스크래퍼 파지 준비")
@@ -201,41 +235,55 @@ class ScraperMotionNode(Node):
 
         # 파지
         self._set_scraper_status(self.STEP_GRIPPING, "스크래퍼 파지중")
-        movel(pre, vel=60, acc=60); time.sleep(1.0)
-        
+        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
         movel(grasp, vel=60, acc=60); time.sleep(1.0)
-        
         set_gripper(0.003); time.sleep(4.0)
         
-        movel(pre, vel=60, acc=60); time.sleep(1.0)
+        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
         
-
         # 이동
+        movel(pre_mid, vel=60, acc=60); time.sleep(1.0)
         movel(mid, vel=60, acc=60); time.sleep(1.0)
-        
-        movej(p5, vel=40, acc=40); time.sleep(1.0)
+        movej(rotate, vel=40, acc=40); time.sleep(1.0)
         
 
         # 도포
+
+        # TCP 오프셋 추가
+        set_robot_mode(ROBOT_MODE_MANUAL)     # TCP 설정을 위해 수동 모드로 전환
+        tcp_name = "scraper"
+        # 224.911+
+        tcp_offset = [0, 0, 224.911+52.0, 0, 0, 0] # x, y, z, a, b, c
+        add_tcp(tcp_name, tcp_offset)# 이 함수도 TCP 설정을 위해 수동 모드에서 호출해야 함
+        set_tcp(tcp_name)            # TCP 이름 설정
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS) # 자동 모드로 전환하여 TCP 적용
+
         self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
-        movel(tilt_right, vel=40, acc=40); time.sleep(1.0)
-        
-        movel(pos7, vel=40, acc=40); time.sleep(1.0)
-        
-        movel(tilt_left, vel=20, acc=20); time.sleep(1.0)
-        
-        movel(pos9, vel=40, acc=40); time.sleep(1.0)
-        
+       
+        do_stroke()  # 중심점에서 1회
+
+        move_relative(-50.0, 80.0, 0.0) # X축 -100mm로 이동 후 반복
+        do_stroke() 
+
+        move_relative(100.0, 80.0, 0.0) # X축 +200mm로 이동 후 반복
+        do_stroke()
+
 
         # 반납
+
+        set_robot_mode(ROBOT_MODE_MANUAL)     # TCP 설정을 위해 수동 모드로 전환
+        set_tcp(self.cfg.tcp)            # TCP 이름 설정
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS) # 자동 모드로 전환하여 TCP 적용
+
+
         self._set_scraper_status(self.STEP_FINISH, "접착제 도포 끝")
-        movel(pre, vel=60, acc=60); time.sleep(1.0)
-        
-        movel(place, vel=60, acc=60); time.sleep(1.0)
+        movel(pre_mid, vel=60, acc=60); time.sleep(1.0)
+        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
+        movel(grasp, vel=60, acc=60); time.sleep(1.0)
         
         set_gripper(0.040); time.sleep(4.0)
         
-        movel(pre, vel=60, acc=60); time.sleep(1.0)
+        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
         
 
         return True

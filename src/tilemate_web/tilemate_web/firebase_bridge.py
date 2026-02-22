@@ -27,7 +27,7 @@ import time
 # ── Firebase 설정 ──────────────────────────────────────────
 import os
 SERVICE_ACCOUNT_KEY_PATH = os.path.expanduser(
-    "~/eam_tilemate/src/tilemate_web/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
+    "~/Team_tilemate/src/tilemate_web/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
 )
 DATABASE_URL = "https://co1-tiling-default-rtdb.asia-southeast1.firebasedatabase.app"
 

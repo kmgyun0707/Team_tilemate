@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'cobot1'
+package_name = 'timemate_web'
 
 setup(
     name=package_name,
@@ -24,8 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'fire=cobot1.firebase_bridge:main',
-            'no=cobot1.testno:main',
+            'fire=timemate_web.firebase_bridge:main',
+            'no=timemate_web.testno:main',
         ],
     },
 )

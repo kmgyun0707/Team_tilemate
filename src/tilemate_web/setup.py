@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'timemate_web'
+package_name = 'tilemate_web'
 
 setup(
     name=package_name,
@@ -24,8 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'fire=timemate_web.firebase_bridge:main',
-            'no=timemate_web.testno:main',
+            'fire=tilemate_web.firebase_bridge:main',
+            'no=tilemate_web.testno:main',
         ],
     },
 )

@@ -33,7 +33,7 @@ setup(
             'task_manager_node = tilemate_main.task_manager_node:main',
             'scraper_motion_node = tilemate_main.scraper_motion_node:main',
             'tile_motion_node = tilemate_main.tile_motion_node:main',
-            'command_node = tilemate_main.command_node:main',
+            'interrupt_node = tilemate_main.interrupt_node:main',
         ],
     },
 )

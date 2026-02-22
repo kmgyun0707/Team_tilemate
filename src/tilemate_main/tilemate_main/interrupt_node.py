@@ -7,7 +7,7 @@ from dsr_msgs2.srv import MoveStop
 
 from tilemate_main.robot_config import RobotConfig
 
-class CommandNode(Node):
+class InterruptNode(Node):
     """
     /robot/command 수신해서,
     stop/pause/reset에 대해 MoveStop 서비스를 호출(하드 정지/홀드).
@@ -52,7 +52,7 @@ class CommandNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     cfg = RobotConfig()
-    node = CommandNode(cfg)
+    node = InterruptNode(cfg)
     try:
         rclpy.spin(node)
     finally:

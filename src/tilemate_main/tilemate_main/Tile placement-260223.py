@@ -64,75 +64,11 @@ def generate_grid(xmin, xmax, ymin, ymax, unit_mm): # 작업영역을 unit_mm �
     occ = [[False] * x_cells for _ in range(y_cells)] # Occupancy Grid 초기화 (False: 빈 공간, True: 점유된 공간)
     return x_cells, y_cells, occ
 
-
-# def greedy_place_tiles(xmin, xmax, ymin, ymax, occ, unit_mm, tile_size_mm, tile_qty, start="Top-Left", scan="Zigzag"): # 겹침 없이 타일 배치 (Greedy)
-#     x_cells = len(occ[0]) if occ else 0
-#     y_cells = len(occ) if occ else 0
-#     if x_cells <= 0 or y_cells <= 0:
-#         return [], {"failed": tile_qty}
-
-#     GAP_MM = 5.0  # 원하는 간격(mm). 0이면 딱 붙음
-#     effective_size = tile_size_mm + GAP_MM
-#     w_cells = int(math.ceil(effective_size / unit_mm))
-#     footprint_mm = w_cells * unit_mm
-#     margin = tile_size_mm / 2.0
-
-#     candidates = []
-#     gy_range = range(0, y_cells)
-#     if start.startswith("Bottom"):
-#         gy_range = reversed(range(0, y_cells))
-
-#     for gy in gy_range:
-#         row = list(range(0, x_cells))
-#         if scan == "Zigzag":
-#             if (gy % 2) == 1:
-#                 row = list(reversed(row))
-#         for gx in row:
-#             candidates.append((gx, gy))
-
-#     placed = []
-#     failed = 0
-
-#     for i in range(tile_qty):
-#         found = False
-#         for gx, gy in candidates:
-#             if gx + w_cells > x_cells or gy + w_cells > y_cells:
-#                 continue
-
-#             cx = xmin + (gx * unit_mm) + (footprint_mm / 2.0)
-#             cy = ymax - (gy * unit_mm) - (footprint_mm / 2.0)
-
-#             if (cx - margin) < xmin or (cx + margin) > xmax or (cy - margin) < ymin or (cy + margin) > ymax:
-#                 continue
-
-#             ok = True
-#             for yy in range(gy, gy + w_cells):
-#                 for xx in range(gx, gx + w_cells):
-#                     if occ[yy][xx]:
-#                         ok = False
-#                         break
-#                 if not ok:
-#                     break
-
-#             if ok:
-#                 for yy in range(gy, gy + w_cells):
-#                     for xx in range(gx, gx + w_cells):
-#                         occ[yy][xx] = True
-
-#                 placed.append({"index": i + 1, "center_x": cx, "center_y": cy, "gx": gx, "gy": gy})
-#                 found = True
-#                 break
-
-#         if not found:
-#             failed += 1
-
-#     return placed, {"failed": failed}
-
 def greedy_place_tiles(
     xmin, xmax, ymin, ymax,
     occ, unit_mm,
     tile_size_mm, tile_qty,
-    start="Top-Left", scan="Zigzag"
+    start="Top-Left", scan="Normal"
 ):
     """겹침 없이 타일을 탐욕적으로 배치 (Greedy) + 열/행 정렬(피치 스텝)"""
 
@@ -164,12 +100,6 @@ def greedy_place_tiles(
 
     for gy in gy_list:
         gx_list = list(range(0, x_cells, pitch_cells))
-
-        # Zigzag는 "행 인덱스" 기준으로 뒤집기
-        if scan == "Zigzag":
-            row_idx = (gy // pitch_cells)
-            if (row_idx % 2) == 1:
-                gx_list = list(reversed(gx_list))
 
         for gx in gx_list:
             candidates.append((gx, gy))
@@ -265,7 +195,7 @@ def run_tile_pipeline_prints(): # 타일 배치/경로 생성 + 단계별 print 
         tile_size_mm=TILE_SIZE_MM,
         tile_qty=TILE_QTY,
         start="Top-Left",
-        scan="Zigzag"
+        scan="Normal"
     )
     if placed:
         print(f" - placed: {len(placed)} tiles")

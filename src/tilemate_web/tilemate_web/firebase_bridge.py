@@ -25,7 +25,10 @@ from firebase_admin import credentials, db
 import time
 
 # ── Firebase 설정 ──────────────────────────────────────────
-SERVICE_ACCOUNT_KEY_PATH = "/home/sa/cobot_ws/src/cobot1/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
+import os
+SERVICE_ACCOUNT_KEY_PATH = os.path.expanduser(
+    "~/TEAM_TILEMATE/src/tilemate_web/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
+)
 DATABASE_URL = "https://co1-tiling-default-rtdb.asia-southeast1.firebasedatabase.app"
 
 
@@ -34,6 +37,9 @@ class FirebaseBridgeNode(Node):
         super().__init__("firebase_bridge")
 
         # Firebase 초기화
+        if not os.path.exists(SERVICE_ACCOUNT_KEY_PATH):
+            raise FileNotFoundError(f"Firebase key not found: {SERVICE_ACCOUNT_KEY_PATH}")
+
         if not firebase_admin._apps:
             cred = credentials.Certificate(SERVICE_ACCOUNT_KEY_PATH)
             firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})

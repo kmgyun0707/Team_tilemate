@@ -18,8 +18,11 @@ Firebase robot_command 감지 → 시뮬레이션 실행
 import time
 import firebase_admin
 from firebase_admin import credentials, db
+import os
 
-FIREBASE_CREDENTIAL_PATH = "/home/sa/cobot_ws/src/cobot1/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
+SERVICE_ACCOUNT_KEY_PATH = os.path.expanduser(
+    "~/Team_tilemate/src/tilemate_web/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
+)
 FIREBASE_DB_URL = "https://co1-tiling-default-rtdb.asia-southeast1.firebasedatabase.app"
 
 TOTAL_TILES = 9
@@ -104,6 +107,10 @@ def run_simulation(status_ref, design):
 
 
 def main():
+    if not os.path.exists(SERVICE_ACCOUNT_KEY_PATH):
+        raise FileNotFoundError(f"Firebase key not found: {SERVICE_ACCOUNT_KEY_PATH}")
+
+
     cred = credentials.Certificate(FIREBASE_CREDENTIAL_PATH)
     firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DB_URL})
 

@@ -30,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
 <<<<<<< HEAD
+<<<<<<< HEAD
             'move_scraper = cobot1.move_scraper:main',
             'move_basic = cobot1.move_basic:main',
             'move_periodic = cobot1.move_periodic:main',
@@ -44,6 +45,19 @@ setup(
             'basic2=cobot1.basic2:main',
             'tile_pic = cobot1.tile_pic_place3:main',
             'tile_no_gripper = cobot1.tile_pic_place3_no_gripper:main',
+=======
+            'move_scraper =        cobot1.move_scraper:main',
+            'move_basic =          cobot1.move_basic:main',
+            'move_periodic =       cobot1.move_periodic:main',
+            'grip_test =           cobot1.grip_test:main',
+            'mini_jog =            cobot1.mini_jog:main',
+            'sensor=               cobot1.sensor_test:main',
+            'fire=                 cobot1.firebase_bridge:main',
+            'fire2=                cobot1.fire2:main',
+            'basic2=               cobot1.basic2:main',
+            'tile_pic =            cobot1.tile_pic_place3:main',
+            'tile_no_gripper =     cobot1.tile_pic_place3_no_gripper:main',
+>>>>>>> 0846997 ([bug fix] entry_points  syntax error fix ,  duplicate entry_points fix)
             'basic2_tile_pic_add = cobot1.basic2_tile_pic_add:main',
 >>>>>>> 753f14b ([Feat] web ui 및 웹으로 로봇팔 제어 기능)
         ],

@@ -24,24 +24,24 @@ CLOSE_W = 0.005
 # ----------------------------
 # positions (absolute posx list)
 # ----------------------------
-pick_above = [344, -101, 300, 50, 179, 140]
+pick_above = [344, -101, 300, 92, 179, 92]
 
 # pick sources (A/B)
 TILE_PICK_A = [345.35345458984375, -95.80809020996094, 175.74713134765625,
-               170.6346435546875, 178.07518005371094, 171.26734924316406]
+               92, 179, 92]
 TILE_POSE_B = [436.9603576660156, -94.84788513183594, 172.90957641601562,
-               171.72900390625, 178.54461669921875, 171.69775390625]
+               92, 179, 92]
 
 # place targets (1..9)
-PLACE_1 = [396.5, 30.5, 200, 50, 179, 140]
-PLACE_2 = [461.5, 30.5, 200, 50, 179, 140]
-PLACE_3 = [526.5, 30.5, 200, 50, 179, 140]
-PLACE_4 = [396.5, 95.5, 200, 50, 179, 140]
-PLACE_5 = [461.5, 95.5, 200, 50, 179, 140]
-PLACE_6 = [526.5, 95.5, 200, 50, 179, 140]
-PLACE_7 = [396.5, 160.5, 200, 50, 179, 140]
-PLACE_8 = [461.5, 160.5, 200, 50, 179, 140]
-PLACE_9 = [526.5, 160.5, 200, 50, 179, 140]
+PLACE_1 = [396.5, 160.5, 200, 92, 179, 92]
+PLACE_2 = [461.5, 160.5, 200, 92, 179, 92]
+PLACE_3 = [526.5, 160.5, 200, 92, 179, 92]
+PLACE_4 = [396.5, 95.5, 200, 92, 179, 92]
+PLACE_5 = [461.5, 95.5, 200, 92, 179, 92]
+PLACE_6 = [526.5, 95.5, 200, 92, 179, 92]
+PLACE_7 = [396.5, 30.5, 200, 92, 179, 92]
+PLACE_8 = [461.5, 30.5, 200, 92, 179, 92]
+PLACE_9 = [526.5, 30.5, 200, 92, 179, 92]
 
 
 class _GripperClient:
@@ -313,7 +313,7 @@ class TileMotionNode(Node):
             settle_sec=0.2,
             need_true=3,
             poll_dt=0.01,
-            lift_up_mm=10.0,
+            lift_up_mm=40.0,
         )
         self.get_logger().info(f"[P&P] {label} -> pick_contact hit={hit}")
 
@@ -350,10 +350,8 @@ class TileMotionNode(Node):
         movej(JReady, vel=VELOCITY, acc=ACC)
         wait(0.2)
 
-        self._set_robot_status(1, "시작 위치 이동(pick_above)")
-        movel(posx(pick_above), ref=DR_BASE, vel=VELOCITY, acc=ACC)
-        wait(0.2)
-
+        # self._set_robot_status(1, "시작 위치 이동(pick_above)")
+  
         places = [PLACE_1, PLACE_2, PLACE_3, PLACE_4, PLACE_5, PLACE_6, PLACE_7, PLACE_8, PLACE_9]
         seq = self.make_sequence_A1_B2(places)
 

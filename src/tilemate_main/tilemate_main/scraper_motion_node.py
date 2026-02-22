@@ -68,8 +68,6 @@ class ScraperMotionNode(Node):
 
         self.get_logger().info("ScraperMotionNode ready: sub /scraper/run_once")
 
-
-
     # -----------------
     # init / helpers
     # -----------------
@@ -102,16 +100,6 @@ class ScraperMotionNode(Node):
             self._set_scraper_status(self.STEP_PREPARE, "일시정지(pause)")
         while rclpy.ok() and self._pause and not self._stop_soft:
             time.sleep(0.05)
-
-    def _checkpoint(self) -> bool:
-        if self._stop_soft:
-            return False
-        self._wait_if_paused()
-        if self._stop_soft:
-            return False
-        return True
-    
-
 
     # -----------------
     # callbacks
@@ -187,6 +175,11 @@ class ScraperMotionNode(Node):
             get_tcp,
             set_tcp,
             set_robot_mode,
+            # 순응/힘제어
+            release_compliance_ctrl,
+            task_compliance_ctrl,
+            set_desired_force,
+            check_force_condition,
             DR_TOOL,
             DR_BASE,
             DR_WORLD,
@@ -199,92 +192,178 @@ class ScraperMotionNode(Node):
             time.sleep(0.05)
 
         # 베이스 좌표계 기준 상대 좌표 이동
-        def move_relative(dx:float,dy:float,dz:float): 
-            cur, _ = get_current_posx(DR_BASE)   # cur: [x,y,z,rx,ry,rz] 형태
-            target = [cur[0] +dx, cur[1]+dy, cur[2]+dz, cur[3], cur[4], cur[5]]
+        def move_relative(dx: float, dy: float, dz: float):
+            cur, _ = get_current_posx(DR_BASE)   # cur: [x,y,z,rx,ry,rz]
+            target = [cur[0] + dx, cur[1] + dy, cur[2] + dz, cur[3], cur[4], cur[5]]
             movel(posx(target), ref=DR_BASE, vel=30, acc=30)
             time.sleep(0.5)
 
-        #왕복하며 펴바르기
-        def do_stroke():  
-            movel(posx([0,0,0,0,-20,0]), ref=DR_TOOL, time=5.0); time.sleep(0.2)
-            move_relative(0.0,  120.0, 0.0)   # +Y 100
+        # ----------------------------
+        # 순응(Compliance) + 힘제어(Force) 유틸
+        # ----------------------------
+        def enable_coating_compliance(
+            stx=(3000, 3000, 200, 200, 200, 200),  # X,Y 강 / Z 약 (예시)
+            fz=-15.0,                              # 툴 Z방향 누르는 힘 (부호는 환경에 맞게 튜닝)
+            ref=DR_TOOL,
+        ):
+            # 1) 순응 ON (Z만 부드럽게)
+            task_compliance_ctrl(stx=list(stx), time=0.0)
+
+            # 2) 목표 힘 ON (Z만)
+            # fd: [Fx,Fy,Fz,Mx,My,Mz], dir: [x,y,z,rx,ry,rz] (1이면 적용)
+            fd = [0.0, 0.0, float(fz), 0.0, 0.0, 0.0]
+            direction = [0, 0, 1, 0, 0, 0]
+            set_desired_force(fd=fd, dir=direction, ref=ref)
+
+        def disable_coating_compliance():
+            try:
+                release_compliance_ctrl()
+            except Exception:
+                pass
+
+        def approach_until_contact(
+            axis=2,             # check_force_condition 규약이 환경마다 다름 (Z=2 가정)
+            threshold=10.0,     # N
+            max_down_mm=10.0,
+            step_mm=0.5,
+        ):
+            """
+            (선택) 접촉을 확실히 만든 뒤 스트로크 시작하고 싶을 때.
+            check_force_condition() 인자 규약이 다르면 TypeError 날 수 있어 try로 감쌈.
+            """
+            moved = 0.0
+            while moved < max_down_mm:
+                movel(posx([0, 0, -step_mm, 0, 0, 0]), ref=DR_TOOL, vel=5, acc=5)
+                moved += step_mm
+                time.sleep(0.05)
+
+                try:
+                    if check_force_condition(axis=axis, min=threshold):
+                        return True
+                except TypeError:
+                    try:
+                        if check_force_condition(axis, threshold):
+                            return True
+                    except Exception:
+                        pass
+
+            return True
+
+        # ----------------------------
+        # 왕복하며 펴바르기
+        # ----------------------------
+        def do_stroke():
+            movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0)
             time.sleep(0.2)
 
-            movel(posx([0,0,0,0,40,0]), ref=DR_TOOL, time=5.0); time.sleep(0.2)
-            move_relative(0.0, -190.0, 0.0)   # -Y 180
+            move_relative(0.0, 120.0, 0.0)   # +Y 120
             time.sleep(0.2)
 
-            movel(posx([0,0,0,0,-20,0]), ref=DR_TOOL, time=5.0); time.sleep(0.2)
-            
+            movel(posx([0, 0, 0, 0, 40, 0]), ref=DR_TOOL, time=5.0)
+            time.sleep(0.2)
+
+            move_relative(0.0, -190.0, 0.0)  # -Y 190
+            time.sleep(0.2)
+
+            movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0)
+            time.sleep(0.2)
+
         JReady = [0, 0, 90, 0, 90, 0]
 
-        pre_grasp   = posx([608.63, 69.05, 210.0,  52.0011, 179.0943,  52.3476])
-        grasp = posx([608.63, 69.05, 173.76, 52.0011, 179.0943,  52.3476])
+        pre_grasp = posx([608.63, 69.05, 210.0,  52.0011, 179.0943,  52.3476])
+        grasp     = posx([608.63, 69.05, 173.76, 52.0011, 179.0943,  52.3476])
 
         pre_mid = posx([480.8698, 91.12, 210.0, 59.9196, 179.1564, 60.5511])
-        mid = posx([480.8698, 91.12, 190.0, 59.9196, 179.1564, 60.5511])
-        rotate = posj([6.671, 16.319, 72.358, 0.566, 90.818, 95.63])
+        mid     = posx([480.8698, 91.12, 190.0, 59.9196, 179.1564, 60.5511])
+        rotate  = posj([6.671, 16.319, 72.358, 0.566, 90.818, 95.63])
 
         # 준비
         self._set_scraper_status(self.STEP_PREPARE, "스크래퍼 파지 준비")
         movej(JReady, vel=self.cfg.vel, acc=self.cfg.acc)
         set_gripper(0.060)
         time.sleep(2.0)
-        
 
         # 파지
         self._set_scraper_status(self.STEP_GRIPPING, "스크래퍼 파지중")
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
-        movel(grasp, vel=60, acc=60); time.sleep(1.0)
-        set_gripper(0.003); time.sleep(4.0)
-        
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
-        
+        movel(pre_grasp, vel=60, acc=60)
+        time.sleep(1.0)
+        movel(grasp, vel=60, acc=60)
+        time.sleep(1.0)
+        set_gripper(0.003)
+        time.sleep(4.0)
+        movel(pre_grasp, vel=60, acc=60)
+        time.sleep(1.0)
+
         # 이동
-        movel(pre_mid, vel=60, acc=60); time.sleep(1.0)
-        movel(mid, vel=60, acc=60); time.sleep(1.0)
-        movej(rotate, vel=40, acc=40); time.sleep(1.0)
-        
+        movel(pre_mid, vel=60, acc=60)
+        time.sleep(1.0)
+        movel(mid, vel=60, acc=60)
+        time.sleep(1.0)
+        movej(rotate, vel=40, acc=40)
+        time.sleep(1.0)
 
-        # 도포
+        # ----------------------------
+        # 도포: TCP 오프셋 추가 + 순응(Compliance) 추가
+        # ----------------------------
+        try:
+            # TCP 오프셋 추가
+            set_robot_mode(ROBOT_MODE_MANUAL)      # TCP 설정을 위해 수동 모드로 전환
+            tcp_name = "scraper"
+            tcp_offset = [0, 0, 224.911 + 52.0, 0, 0, 0]  # x, y, z, a, b, c
+            add_tcp(tcp_name, tcp_offset)          # 수동 모드에서 호출
+            set_tcp(tcp_name)
+            set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+            time.sleep(0.2)
 
-        # TCP 오프셋 추가
-        set_robot_mode(ROBOT_MODE_MANUAL)     # TCP 설정을 위해 수동 모드로 전환
-        tcp_name = "scraper"
-        # 224.911+
-        tcp_offset = [0, 0, 224.911+52.0, 0, 0, 0] # x, y, z, a, b, c
-        add_tcp(tcp_name, tcp_offset)# 이 함수도 TCP 설정을 위해 수동 모드에서 호출해야 함
-        set_tcp(tcp_name)            # TCP 이름 설정
-        set_robot_mode(ROBOT_MODE_AUTONOMOUS) # 자동 모드로 전환하여 TCP 적용
+            self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
 
-        self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
-       
-        do_stroke()  # 중심점에서 1회
+            # ✅ 순응 + 목표힘 ON
+            enable_coating_compliance(
+                stx=(3000, 3000, 200, 200, 200, 200),
+                fz=-15.0,
+                ref=DR_TOOL,
+            )
 
-        move_relative(-50.0, 80.0, 0.0) # X축 -100mm로 이동 후 반복
-        do_stroke() 
+            # (선택) 접촉을 확실히 만들고 시작하려면 주석 해제
+            approach_until_contact(threshold=4.0, max_down_mm=15.0)
 
-        move_relative(100.0, 80.0, 0.0) # X축 +200mm로 이동 후 반복
-        do_stroke()
+            # 도포 스트로크
+            do_stroke()  # 중심점에서 1회
 
+            move_relative(-50.0, 80.0, 0.0)  # X축 -100mm로 이동 후 반복 
+            do_stroke()
 
+            move_relative(100.0, 80.0, 0.0)  # X축 +200mm로 이동 후 반복
+            do_stroke()
+
+        finally:
+            #  순응 OFF 
+            disable_coating_compliance()
+
+            # TCP 원복 (도포 중 예외가 나도 복구)
+            try:
+                set_robot_mode(ROBOT_MODE_MANUAL)
+                set_tcp(self.cfg.tcp)
+                set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+            except Exception:
+                pass
+
+        # ----------------------------
         # 반납
-
-        set_robot_mode(ROBOT_MODE_MANUAL)     # TCP 설정을 위해 수동 모드로 전환
-        set_tcp(self.cfg.tcp)            # TCP 이름 설정
-        set_robot_mode(ROBOT_MODE_AUTONOMOUS) # 자동 모드로 전환하여 TCP 적용
-
-
+        # ----------------------------
         self._set_scraper_status(self.STEP_FINISH, "접착제 도포 끝")
-        movel(pre_mid, vel=60, acc=60); time.sleep(1.0)
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
-        movel(grasp, vel=60, acc=60); time.sleep(1.0)
-        
-        set_gripper(0.040); time.sleep(4.0)
-        
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
-        
+        movel(pre_mid, vel=60, acc=60)
+        time.sleep(1.0)
+        movel(pre_grasp, vel=60, acc=60)
+        time.sleep(1.0)
+        movel(grasp, vel=60, acc=60)
+        time.sleep(1.0)
+
+        set_gripper(0.040)
+        time.sleep(4.0)
+
+        movel(pre_grasp, vel=60, acc=60)
+        time.sleep(1.0)
 
         return True
 
@@ -293,7 +372,7 @@ def main(args=None):
     rclpy.init(args=args)
     cfg = RobotConfig()
 
-    # ✅ DSR_ROBOT2 import 전에 boot node 먼저 만들고 DR_init.__dsr__node 세팅
+    # DSR_ROBOT2 import 전에 boot node 먼저 만들고 DR_init.__dsr__node 세팅
     boot = rclpy.create_node("dsr_boot_scraper", namespace=cfg.robot_id)
     DR_init.__dsr__id = cfg.robot_id
     DR_init.__dsr__model = cfg.robot_model

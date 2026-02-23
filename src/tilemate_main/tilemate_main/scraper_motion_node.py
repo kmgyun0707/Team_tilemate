@@ -155,8 +155,8 @@ class ScraperMotionNode(Node):
 
         finally:
             self._running = False
-            if not self._stop_soft:
-                self._set_scraper_status(self.STEP_PREPARE, "대기(run_once 기다리는 중)")
+            # if not self._stop_soft:
+            #     self._set_scraper_status(self.STEP_PREPARE, "대기(run_once 기다리는 중)")
 
     # -----------------
     # DSR motions
@@ -343,7 +343,7 @@ class ScraperMotionNode(Node):
             approach_until_contact_world_z(threshold=4.0, max_down_mm=15.0, step_mm=0.5)
 
             # 2) ✅ 접촉 후에 목표힘 ON (계속 아래로 누르면서 유지)
-            enable_press_force(fz=-10.0) 
+            enable_press_force(fz=-5.0) 
             ##############################################################
             # 튜닝 값
             ##############################################################

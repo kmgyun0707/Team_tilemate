@@ -88,7 +88,7 @@ class TileMotionNode(Node):
         # pubs
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
         self.pub_state = self.create_publisher(String, "/robot/state", 10)
-        self.pub_step = self.create_publisher(Int32, "/robot/step", 10)
+        self.pub_step = self.create_publisher(Int32, "/tile/step", 10)
         self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10)
         self._completed_jobs = 0
 
@@ -437,7 +437,7 @@ class TileMotionNode(Node):
             wait(0.1)
 
             self._set_robot_status(2, f"타일 파지 하강(순응) - {tile_idx}번")
-            if not self.compliant_approach(threshold_n=5.0, timeout_s=5.0):
+            if not self.compliant_approach(threshold_n=5.0, timeout_s=10.0):
                 self.get_logger().warn(f"[TILE] pick compliant failed tile_idx={tile_idx}")
                 return False
 
@@ -457,7 +457,7 @@ class TileMotionNode(Node):
                 return False
 
             # ---------------- DETACH ----------------
-            ok_detach = self.detach_tile(tile_idx, tilt_abs_deg=24.0)
+            ok_detach = self.detach_tile(tile_idx, tilt_abs_deg=26.0)
             self.get_logger().info(f"[TILE] detach result tile_idx={tile_idx} ok={ok_detach}")
 
             self._set_robot_status(4, f"타일 배치 상부 복귀 - {tile_idx}번")

@@ -336,7 +336,7 @@ class ScraperMotionNode(Node):
             set_robot_mode(ROBOT_MODE_AUTONOMOUS)
             time.sleep(0.2)
 
-            self._set_scraper_status(self.STEP_COATING, "접착제 도포중(소프트 접촉 -> 압력 유지)")
+            self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
 
             # 1) ✅ 힘 없이 컴플라이언스만 켜고(충격 완화) 살살 접촉 만들기
             enable_soft_touch_compliance(stx=(4000, 4000, 80, 200, 200, 200))

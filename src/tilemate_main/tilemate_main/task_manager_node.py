@@ -137,8 +137,8 @@ class TaskManagerNode(Node):
         return state, tok, msg
 
     def _is_active_token(self, tok: int) -> bool:
-        # stop/reset 이후 늦게 들어오는 status 무시용
-        return self._busy and (tok == self._active_token)
+        # busy가 잠깐 False로 내려가도, token이 같으면 유효로 인정
+        return tok == self._active_token
 
     # -----------------
     # callbacks
@@ -189,6 +189,7 @@ class TaskManagerNode(Node):
 
         if state == "done":
             self.get_logger().info(f"[TASK] scraper done token={tok} -> start tile")
+            self._phase = "TILE"   # ✅ 강제 정합
             self._start_tile(tok)
 
         elif state == "error":

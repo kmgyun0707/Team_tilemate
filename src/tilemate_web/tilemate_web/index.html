@@ -125,6 +125,11 @@
             background: transparent; color: #999; border: 1px solid #ddd;
             border-radius: 8px; cursor: pointer; flex: unset;
         }
+
+        @keyframes blink-estop {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.4; }
+        }
     </style>
 </head>
 <body>
@@ -142,7 +147,7 @@
 
     <div class="control-panel">
         <button id="btn-start" onclick="openDesignPopup()">시작</button>
-        <button id="btn-pause" onclick="sendCommand('pause')">비상정지</button>
+        <button id="btn-pause" onclick="sendCommand('stop')">비상정지</button>
         <button id="btn-reset" onclick="resetSystem()">초기화</button>
     </div>
 
@@ -156,7 +161,51 @@
         <div id="step4" class="step">타일 배치</div>
     </div>
 
-    <div class="bottom-section">
+    <div class="bottom-section" id="bottom-section" style="position: relative;">
+
+        <!-- 비상정지 오버레이 -->
+        <div id="estop-overlay" style="
+            display: none;
+            position: absolute; inset: 0;
+            z-index: 100;
+            border: 6px solid #c62828;
+            border-radius: 12px;
+            background: rgba(198, 40, 40, 0.13);
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 18px;
+            pointer-events: none;
+        ">
+            <div style="
+                background: #c62828;
+                color: white;
+                font-size: 2em;
+                font-weight: bold;
+                letter-spacing: 4px;
+                padding: 12px 36px;
+                border-radius: 10px;
+                box-shadow: 0 4px 20px rgba(198,40,40,0.5);
+                animation: blink-estop 1s step-start infinite;
+            ">⛔ 비상정지</div>
+            <button onclick="resumeRobot()" style="
+                pointer-events: all;
+                padding: 14px 44px;
+                font-size: 1.3em;
+                font-weight: bold;
+                background: #ffffff;
+                color: #c62828;
+                border: 3px solid #c62828;
+                border-radius: 10px;
+                cursor: pointer;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                transition: 0.2s;
+                flex: unset;
+            " onmouseover="this.style.background='#ffebee'" onmouseout="this.style.background='#ffffff'">
+                ▶ 재개
+            </button>
+        </div>
+
         <div class="tile-grid-wrapper">
             <div class="tile-grid" id="tile-map"></div>
             <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em; flex-wrap: wrap;">
@@ -542,7 +591,9 @@
     const customValues = new Array(9).fill('A'); // 기본값 A
 
     function openCustomPatternPopup() {
-        customValues.fill('A'); // 초기화
+        // 팝업을 열 때마다 항상 A로 초기화
+        customValues.fill('A');
+
         const grid = document.getElementById('custom-input-grid');
         grid.innerHTML = '';
         for (let i = 0; i < 9; i++) {
@@ -651,11 +702,31 @@
                 firstTile.classList.add('working');
                 firstTile.innerText = '작업중';
             }
-        } else if (cmd === 'pause') {
+        } else if (cmd === 'stop') {
             pauseTimer();
+            // 비상정지 오버레이 표시
+            const overlay = document.getElementById('estop-overlay');
+            overlay.style.display = 'flex';
         }
     }
     window.sendCommand = sendCommand;
+
+    function resumeRobot() {
+        // Firebase /robot/command 에 start 전송
+        database.ref('robot_status').once('value').then(snapshot => {
+            const data = snapshot.val() || {};
+            database.ref('robot_command').set({
+                action: 'start',
+                completed_jobs: data.completed_jobs || 0,
+                current_step: data.current_step || 0,
+                timestamp: Date.now()
+            });
+        });// 오버레이 숨기기
+        document.getElementById('estop-overlay').style.display = 'none';
+        // 타이머 재개
+        startTimer();
+    }
+    window.resumeRobot = resumeRobot;
 
     // -------------------------------------------------------
     // 타이머
@@ -697,6 +768,9 @@
         // 2. 타이머 전부 정지
         for (let id in activeTimers) clearInterval(activeTimers[id]);
         Object.keys(activeTimers).forEach(key => delete activeTimers[key]);
+
+        // 비상정지 오버레이 초기화
+        document.getElementById('estop-overlay').style.display = 'none';
 
         // 3. 2D 타일 UI 초기화
         for (let i = 1; i <= TOTAL_TILES; i++) {

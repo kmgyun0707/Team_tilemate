@@ -12,7 +12,7 @@
 #   ※ /robot/design 은 subscribe 안 함 (bridge가 publish 전용)
 #
 # 발행 토픽 (Firebase → 로봇):
-#   /robot/command   (std_msgs/String)  "start" | "pause" | "reset"
+#   /robot/command   (std_msgs/String)  "start" | "stop" | "reset"
 #   /robot/design    (std_msgs/Int32)   1 | 2 | 3  ← 웹에서 선택한 디자인 번호
 
 import threading
@@ -61,6 +61,8 @@ class FirebaseBridgeNode(Node):
         self._pub_cmd    = self.create_publisher(String, '/robot/command', 10)
         self._pub_design = self.create_publisher(Int32,  '/robot/design',  10)
         self._pub_design_ab = self.create_publisher(String,  '/robot/design_ab',  10)
+        self._pub_completed     = self.create_publisher(Int32,  '/robot/completed_jobs', 10)
+        self._pub_step          = self.create_publisher(Int32,  '/robot/step',           10)
 
         # ── Subscriber: 로봇 상태 → Firebase ──────────────
         # /robot/design 은 여기서 subscribe 안 함 (bridge가 publish 전용)
@@ -105,12 +107,26 @@ class FirebaseBridgeNode(Node):
 
                 if action and action != self._last_command:
                     self._last_command = action
-                    if action in ("start", "pause", "reset"):
+                    if action in ("start", "stop", "reset"):
                         # /robot/command publish
                         msg = String()
                         msg.data = action
                         self._pub_cmd.publish(msg)
                         self.get_logger().info(f"[CMD] Firebase '{action}' → /robot/command publish")
+
+                        if action == "start":
+                            completed_jobs = int(cmd.get("completed_jobs", 0)) if isinstance(cmd, dict) else 0
+                            current_step   = int(cmd.get("current_step",   0)) if isinstance(cmd, dict) else 0
+
+                            cj_msg = Int32()
+                            cj_msg.data = completed_jobs
+                            self._pub_completed.publish(cj_msg)
+                            self.get_logger().info(f"[RESUME] completed_jobs={completed_jobs} → /robot/completed_jobs publish")
+
+                            st_msg = Int32()
+                            st_msg.data = current_step
+                            self._pub_step.publish(st_msg)
+                            self.get_logger().info(f"[RESUME] current_step={current_step} → /robot/step publish")
 
                         # start 명령이면:
                         if action == "start" and design is not None:
@@ -172,6 +188,8 @@ class FirebaseBridgeNode(Node):
                                 "completed_jobs": 0,
                                 "working_tile":   0,
                                 "speed":          0,
+                                "design":         0,
+                                "design_ab":      "",
                             })
                             self.get_logger().info("[RESET] Firebase robot_status 전체 초기화 완료")
 

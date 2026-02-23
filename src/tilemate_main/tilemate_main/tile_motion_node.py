@@ -27,8 +27,8 @@ CLOSE_W = 0.005  # gripper close (m)
 # positions (absolute posx list)
 # ----------------------------
 # pick positions (A/B)
-PICK_ABOVE_A = [344.54, -100.1, 260.95, 74.35, 178.8, 73.81]
-PICK_ABOVE_B = [436.16, -98.84, 260.78, 69.2, 178.73, 68.63]
+PICK_ABOVE_A = [344.54, -100.1+5.0, 260.95, 74.35, 178.8, 73.81]
+PICK_ABOVE_B = [436.16, -98.84+5.0, 260.78, 69.2, 178.73, 68.63]
 
 # place positions (1..9)
 PLACE_TILT_BASE01 = [402.08, 158.83, 229.77, 75.71, 178.59, 76.82]
@@ -457,7 +457,7 @@ class TileMotionNode(Node):
                 return False
 
             # ---------------- DETACH ----------------
-            ok_detach = self.detach_tile(tile_idx, tilt_abs_deg=26.0)
+            ok_detach = self.detach_tile(tile_idx, tilt_abs_deg=24.0)
             self.get_logger().info(f"[TILE] detach result tile_idx={tile_idx} ok={ok_detach}")
 
             self._set_robot_status(4, f"타일 배치 상부 복귀 - {tile_idx}번")

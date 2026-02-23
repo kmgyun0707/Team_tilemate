@@ -281,7 +281,7 @@ class ScraperMotionNode(Node):
             movel(posx([0, 0, 0, 0, 40, 0]), ref=DR_TOOL, time=5.0)
             time.sleep(0.2)
 
-            move_relative(0.0, -190.0, 0.0)
+            move_relative(0.0, -180.0, 0.0)
             time.sleep(0.2)
 
             movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0)

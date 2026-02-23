@@ -26,23 +26,36 @@ CLOSE_W = 0.005
 # ----------------------------
 pick_above = [344, -101, 300, 92, 179, 92]
 
-# pick sources (A/B)
-TILE_PICK_A = [345.35345458984375, -95.80809020996094, 175.74713134765625,
-               92, 179, 92]
-TILE_POSE_B = [436.9603576660156, -94.84788513183594, 172.90957641601562,
-               92, 179, 92]
 
-# place targets (1..9)
-PLACE_1 = [396.5, 160.5, 200, 92, 179, 92]
-PLACE_2 = [461.5, 160.5, 200, 92, 179, 92]
-PLACE_3 = [526.5, 160.5, 200, 92, 179, 92]
-PLACE_4 = [396.5, 95.5, 200, 92, 179, 92]
-PLACE_5 = [461.5, 95.5, 200, 92, 179, 92]
-PLACE_6 = [526.5, 95.5, 200, 92, 179, 92]
-PLACE_7 = [396.5, 30.5, 200, 92, 179, 92]
-PLACE_8 = [461.5, 30.5, 200, 92, 179, 92]
-PLACE_9 = [526.5, 30.5, 200, 92, 179, 92]
+# 집을 타일 위치(pick)
+PICK_ABOVE_A = [344.54, -100.1, 260.95, 74.35, 178.8, 73.81]
+PICK_ABOVE_B = [436.16, -98.84, 260.78, 69.2, 178.73, 68.63]
+# 배치 타일 위치 
+PLACE_TILT_BASE01 = [402.08, 158.83, 229.77, 75.71, 178.59, 76.82]
+PLACE_TILT_BASE02 = [469.39, 157.97, 228.80,  69.56, 178.45, 70.97]
+PLACE_TILT_BASE03 = [539.79, 156.41, 229.13, 70.08, 178.43, 71.37]
 
+PLACE_TILT_BASE04 = [401.85, 90.05,  229.55, 83.17, 178.79, 84.01]
+PLACE_TILT_BASE05 = [469.94, 89.92,  228.78, 75.87, 178.68, 76.88]
+PLACE_TILT_BASE06 = [539.63, 88.61,  228.16, 71.45, 178.57, 72.51]
+
+PLACE_TILT_BASE07 = [401.19, 22.88,  228.09, 95.78, 178.83, 96.38]
+PLACE_TILT_BASE08 = [468.62, 21.5,   227.98, 85.68, 178.79, 86.43]
+PLACE_TILT_BASE09 = [539.05, 20.33,  227.54, 80.24, 178.71, 81.15]
+
+pick_down  = [344, -101, 200, 50, 179, 140]
+place_down = [401,  22, 170, 8, -179, 98]
+
+
+# 압착판 도구 잡는 위치
+TOOL_GRIP_ABOVE = [531.2, -101.3, 210, 169.29, 177.87, 169.98] # 흡착 도구 위치 (파지 준비 자세)
+TOOL_GRIP_DOWN =  [531.2, -101.3, 165, 169.29, 177.87, 169.98]# 흡착 도구 위치 (파지 자세)
+TOOL_WAYPOINT   = [470, 24, 230, 6, -179, 97]
+
+
+
+OPEN_W  = 0.040  # 그리퍼 열림 (단위: m)
+CLOSE_W = 0.005  # 그리퍼 닫힘 (타일 잡기)
 
 class _GripperClient:
     def __init__(self, node: Node):
@@ -54,6 +67,16 @@ class _GripperClient:
         msg.data = float(width_m)
         self._pub.publish(msg)
         self._node.get_logger().info(f"[GRIPPER->CMD] width_m={msg.data:.4f}")
+
+    def grab(self):
+        self._node.get_logger().info("[TOOL] (Grab)")
+        self.set_width(CLOSE_W)
+        time.sleep(1.0) # 그리퍼가 완전히 닫힐 때까지 잠시 대기
+ 
+    def release(self):
+        self._node.get_logger().info("[TOOL] (Release)")
+        self.set_width(OPEN_W)
+        time.sleep(1.0) # 그리퍼가 완전히 열릴 때까지 잠시 대기
 
 
 class TileMotionNode(Node):
@@ -74,10 +97,12 @@ class TileMotionNode(Node):
         self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10)
         self._completed_jobs = 0
 
-        # subs
+        self._design_pattern = ['A'] * 9 # 기본값: 모두 A 패턴으로 시작 (필요시 /robot/design_ab 토픽으로 업데이트)
+
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
         self.create_subscription(Bool,  "/task/pause", self._cb_pause, 10)
         self.create_subscription(Bool,  "/task/stop_soft", self._cb_stop_soft, 10)
+        self.create_subscription(String, "/robot/design_ab", self._cb_design_ab, 10)
 
         self.gripper = _GripperClient(self)
 
@@ -105,19 +130,12 @@ class TileMotionNode(Node):
         self.pub_state.publish(m_state)
         self.get_logger().info(f"[STATUS] step={m_step.data} state='{m_state.data}'")
 
-    def _publish_status(self, s: str):
-        m = String()
-        m.data = s
-        self.pub_status.publish(m)
-        self.get_logger().info(f"[TILE->STATUS] {m.data}")
+    def _cb_design_ab(self, msg: String):
+        """ /robot/design_ab 토픽이 들어오면 호출되는 콜백 함수 """
+        raw_string = msg.data
+        self._design_pattern = [x.strip().upper() for x in raw_string.split(",")]
+        self.get_logger().info(f"[TILE] 디자인 패턴 수신 및 파싱 완료: {self._design_pattern}")
 
-    def _wait_if_paused(self):
-        while rclpy.ok() and self._pause and not self._stop_soft:
-            time.sleep(0.05)
-
-    # -----------------
-    # callbacks
-    # -----------------
     def _cb_run_once(self, msg: Int32):
         if self._running:
             self.get_logger().warn("[TILE] run_once ignored (already running)")
@@ -176,199 +194,153 @@ class TileMotionNode(Node):
         finally:
             self._running = False
 
-    # ============================================================
-    # Pick 전용: "쭉" 하강하면서 raw force 출력/판정
-    # 판정되면 10mm 상승(move_relative)만 수행
-    # ============================================================
-    def down_until_contact_then_up(
-        self,
-        max_down_mm: float = 200.0,
-        axis: int = 2,
-        trigger_mode: str = "abs",   # "abs" | "gt" | "lt"
-        threshold_n: float = 15.0,
-        vel_down: float = 8.0,
-        acc_down: float = 8.0,
-        poll_dt: float = 0.01,
-        settle_sec: float = 0.3,
-        need_true: int = 3,
-        lift_up_mm: float = 10.0,
-    ) -> bool:
-        import DSR_ROBOT2 as dr
-        from DSR_ROBOT2 import (
-            posx, movel, wait, get_current_posx,
-            set_ref_coord, task_compliance_ctrl, release_compliance_ctrl,
-            amovel, check_motion,
-            DR_BASE
-        )
+    # 🚨 수정됨: tile_idx를 파라미터로 받아서 3의 배수인지 확인
+    def detach_tile(self, tile_idx):
+        self.get_logger().info(f"[TILE] Detaching tile {tile_idx} by tilting...")
+        from DSR_ROBOT2 import posx, movel, wait, DR_TOOL, add_tcp, get_tcp, set_tcp, DR_BASE, set_robot_mode, ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS
+        
+        set_robot_mode(ROBOT_MODE_MANUAL)
+        tcp_name = "MySuction_v1"
+        tcp_offset = [0, 0, 245, 0, 0, 0] # 265
+        add_tcp(tcp_name, tcp_offset)
+        set_tcp(tcp_name)
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+        
+        wait(0.5)
+        self.get_logger().info(f"[TILE] Current TCP: {get_tcp()}")
+        
+        # ✅ 3의 배수(3, 6, 9) 자리에서는 특이점 회피를 위해 꺾는 각도를 -22로 설정
+        if tile_idx % 3 == 0:
+            tilt_angle = -22
+        else:
+            tilt_angle = 22
+            
+        tilt_forward = posx([0, 0, 0, 0, tilt_angle, 0])
+        movel(tilt_forward, vel=1, acc=1, ref=DR_TOOL, time=0.6)
+        wait(0.2)
+        
+        set_robot_mode(ROBOT_MODE_MANUAL)
+        set_tcp("GripperDA_v1")
+        set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+        wait(0.3)
 
-        def move_relative(dx: float, dy: float, dz: float):
-            cur, _ = get_current_posx(DR_BASE)
-            target = [cur[0] + dx, cur[1] + dy, cur[2] + dz, cur[3], cur[4], cur[5]]
-            movel(posx(target), ref=DR_BASE, vel=10, acc=10)
-            time.sleep(0.2)
+    
+    def _perform_task_2x2(self):
+        from DSR_ROBOT2 import movej, movel, wait, posx, get_current_posx
+        from DSR_ROBOT2 import DR_BASE
+        
+        def compliant_approach(threshold_n=7.0, timeout_s=10.0):
+            from DSR_ROBOT2 import (
+                set_ref_coord, task_compliance_ctrl, set_desired_force,
+                check_force_condition, release_force, release_compliance_ctrl,
+                DR_TOOL, DR_FC_MOD_REL, DR_AXIS_Z
+            )
 
-        # force getter
-        if not hasattr(dr, "get_tool_force"):
-            self.get_logger().error("[FORCE] get_tool_force() not found in this DSR_ROBOT2")
-            return False
-        force_fn = dr.get_tool_force
-        self.get_logger().info("[FORCE] using get_tool_force() (RAW)")
+            self.get_logger().info(f"[COMPLIANT] 힘 제어 하강 시작 (목표 힘: {threshold_n}N)")
 
-        self._wait_if_paused()
-        if self._stop_soft:
-            return False
+            set_ref_coord(DR_TOOL)
+            task_compliance_ctrl(stx=[3000, 3000, 50, 200, 200, 200])
+            wait(0.5) 
 
-        # compliance ON
-        set_ref_coord(DR_BASE)
-        task_compliance_ctrl(stx=[3000, 3000, 80, 200, 200, 200], time=0.0)
-        wait(float(settle_sec))
+            set_desired_force(
+                fd=[0, 0, float(threshold_n+15), 0, 0, 0], 
+                dir=[0, 0, 1, 0, 0, 0], 
+                mod=DR_FC_MOD_REL
+            )
 
-        # descend async
-        cur0, _ = get_current_posx(DR_BASE)
-        target = [cur0[0], cur0[1], cur0[2] - float(max_down_mm), cur0[3], cur0[4], cur0[5]]
-        amovel(posx(target), ref=DR_BASE, vel=vel_down, acc=acc_down)
-
-        def is_trigger(raw_val: float) -> bool:
-            if trigger_mode == "abs":
-                return abs(raw_val) >= float(threshold_n)
-            if trigger_mode == "gt":
-                return raw_val >= float(threshold_n)
-            if trigger_mode == "lt":
-                return raw_val <= float(threshold_n)
-            return False
-
-        hit = False
-        true_count = 0
-
-        try:
+            t0 = time.time()
+            is_contact = False
+            
             while True:
-                if self._stop_soft:
+                ret = check_force_condition(DR_AXIS_Z, min=0, max=float(threshold_n))
+                
+                if ret == -1:
+                    self.get_logger().info(f"✅ [COMPLIANT] 목표 힘({threshold_n}N) 도달! 하강 정지.")
+                    is_contact = True
                     break
-                self._wait_if_paused()
+                
+                wait(0.1)
 
-                try:
-                    f = force_fn()
-                    fx, fy, fz = float(f[0]), float(f[1]), float(f[2])
-                    raw_val = float(f[axis])
-                    print(f"[FORCE RAW] Fx={fx:.2f} Fy={fy:.2f} Fz={fz:.2f} -> chk={raw_val:.2f}")
+            release_force()
+            release_compliance_ctrl()
+            set_ref_coord(DR_BASE)
+            wait(0.5)
 
-                    if is_trigger(raw_val):
-                        true_count += 1
-                        if true_count >= int(need_true):
-                            hit = True
-                            self.get_logger().info(
-                                f"[CONTACT RAW] mode={trigger_mode} axis={axis} raw={raw_val:.2f} thr={threshold_n:.2f}"
-                            )
-                            break
-                    else:
-                        true_count = 0
-                except Exception as e:
-                    print("[FORCE RAW] read fail:", e)
-
-                try:
-                    if check_motion() == 0:
-                        self.get_logger().warn("[CONTACT RAW] motion finished before trigger")
-                        break
-                except Exception:
-                    pass
-
-                dr.wait(float(poll_dt))
-
-        finally:
-            try:
-                release_compliance_ctrl()
-            except Exception:
-                pass
-            wait(0.05)
-
-        # lift up a bit if hit
-        if hit and (not self._stop_soft):
-            move_relative(0.0, 0.0, float(lift_up_mm))
-
-        return hit
-
-    # ============================================================
-    # Pick&Place "이동만" + Pick에서만 접촉 하강 포함
-    # ============================================================
-    def pick_and_place_move_only_with_pick_contact(self, pick_pos: list, place_pos: list, label: str = "") -> None:
-        from DSR_ROBOT2 import movel, posx, DR_BASE, wait
-
-        self._wait_if_paused()
-        if self._stop_soft:
-            return
-
-        # 1) PICK 이동
-        self.get_logger().info(f"[P&P] {label} -> move to PICK")
-        movel(posx(pick_pos), ref=DR_BASE, vel=VELOCITY, acc=ACC)
-        wait(0.2)
-
-        # 2) PICK: 하강(쭉) + 힘 감지되면 상승
-        self.get_logger().info(f"[P&P] {label} -> pick contact descend")
-        hit = self.down_until_contact_then_up(
-            max_down_mm=80.0,        # ★ 먼저 짧게 테스트 추천 (필요하면 200으로)
-            trigger_mode="abs",
-            threshold_n=15.0,        # ★ raw 임계치 튜닝
-            vel_down=8.0,
-            acc_down=8.0,
-            settle_sec=0.2,
-            need_true=3,
-            poll_dt=0.01,
-            lift_up_mm=40.0,
-        )
-        self.get_logger().info(f"[P&P] {label} -> pick_contact hit={hit}")
-
-        self._wait_if_paused()
-        if self._stop_soft:
-            return
-
-        # 3) PLACE 이동 (현재는 이동만)
-        self.get_logger().info(f"[P&P] {label} -> move to PLACE (move only)")
-        movel(posx(place_pos), ref=DR_BASE, vel=VELOCITY, acc=ACC)
-        wait(0.2)
-
-    # ============================================================
-    # A1, B2, A3, B4... 시퀀스
-    # ============================================================
-    def make_sequence_A1_B2(self, places: list) -> list:
-        pickA = TILE_PICK_A
-        pickB = TILE_POSE_B
-        seq = []
-        for i, place in enumerate(places, start=1):
-            pick = pickA if (i % 2 == 1) else pickB
-            label = ("A" if (i % 2 == 1) else "B") + str(i)
-            seq.append((pick, place, label))
-        return seq
-
-    # ============================================================
-    # demo task
-    # ============================================================
-    def _perform_task_pick_place_sequence_pick_contact_only(self) -> bool:
-        from DSR_ROBOT2 import movej, movel, posx, DR_BASE, wait
-
+        # ============================================================
+        # Task sequence 시작
+        # ============================================================
         JReady = [0, 0, 90, 0, 90, 90]
-        self._set_robot_status(0, "JReady 이동")
+
+        self.get_logger().info("[TILE] Move to JReady")
         movej(JReady, vel=VELOCITY, acc=ACC)
-        wait(0.2)
 
-        # self._set_robot_status(1, "시작 위치 이동(pick_above)")
-  
-        places = [PLACE_1, PLACE_2, PLACE_3, PLACE_4, PLACE_5, PLACE_6, PLACE_7, PLACE_8, PLACE_9]
-        seq = self.make_sequence_A1_B2(places)
+        place_targets = [
+            (1, PLACE_TILT_BASE01),
+            (2, PLACE_TILT_BASE02),
+            (3, PLACE_TILT_BASE03),
+            (4, PLACE_TILT_BASE04),
+            (5, PLACE_TILT_BASE05),
+            (6, PLACE_TILT_BASE06),
+            (7, PLACE_TILT_BASE07),
+            (8, PLACE_TILT_BASE08),
+            (9, PLACE_TILT_BASE09),
+        ]
 
-        self._set_robot_status(2, "A1,B2,A3... (Pick=접촉하강, Place=이동만)")
-        for pick_pos, place_pos, label in seq:
-            if self._stop_soft:
-                self.get_logger().warn("[TILE] stop_soft -> abort sequence")
-                return False
-            self._wait_if_paused()
+        # self.gripper.release()  
+        # movel(TOOL_GRIP_ABOVE, vel=VELOCITY, acc=ACC)
+        # movel(TOOL_GRIP_DOWN, vel=VELOCITY, acc=ACC)
+        # self.gripper.grab()
+        
+        # movel(TOOL_GRIP_ABOVE, vel=VELOCITY, acc=ACC)
+        
+        # self._set_robot_status(0, "안전 구역(Waypoint)으로 이동")
+        # movel(TOOL_WAYPOINT, vel=VELOCITY, acc=ACC)
 
-            self.get_logger().info(f"[SEQ] {label} start")
-            self.pick_and_place_move_only_with_pick_contact(pick_pos, place_pos, label=label)
-            self.get_logger().info(f"[SEQ] {label} done")
 
-        self._set_robot_status(3, "시퀀스 종료")
-        return True
+        for tile_idx, place_pos in place_targets:
+            
+            list_index = tile_idx - 1
+            
+            if list_index < len(self._design_pattern):
+                tile_type = self._design_pattern[list_index]
+            else:
+                tile_type = 'A'
+            
+            if tile_type == 'B':
+                current_pick_pos = PICK_ABOVE_B
+                color_name = "흰색"
+            else:
+                current_pick_pos = PICK_ABOVE_A
+                color_name = "검정"
 
+            # ---------------- PICK ----------------
+            self._set_robot_status(1, f"타일 파지 준비 ({color_name} 타일함 상부) - {tile_idx}번 타일")
+            movel(current_pick_pos, vel=VELOCITY, acc=ACC)
+
+            self._set_robot_status(2, f"타일 파지 하강 ({tile_idx}번 타일)")
+            compliant_approach(threshold_n=6.0, timeout_s=5.0)
+
+            wait(0.3)
+            self._set_robot_status(3, f"타일 파지 상승 ({tile_idx}번 타일)")
+            movel(current_pick_pos, vel=VELOCITY, acc=ACC)
+
+            # ---------------- PLACE ----------------
+            self._set_robot_status(4, f"타일 배치 위치 상부 이동 ({tile_idx}번 타일)")
+            movel(place_pos, vel=VELOCITY, acc=ACC)
+
+            self._set_robot_status(4, f"타일 배치 하강 ({tile_idx}번 타일)")
+            compliant_approach(threshold_n=5.0, timeout_s=10.0)
+
+            # ---------------- DETACH ----------------
+            # 🚨 수정됨: 현재 타일 번호를 넘겨줌
+            self.detach_tile(tile_idx)
+
+            self._set_robot_status(4, f"타일 배치 상부 복귀 ({tile_idx}번 타일)")
+            movel(place_pos, vel=VELOCITY, acc=ACC)
+            
+            self.get_logger().info(f"🎉 {tile_idx}번 타일 작업 완료!")
+        
+    
 
 def main(args=None):
     rclpy.init(args=args)

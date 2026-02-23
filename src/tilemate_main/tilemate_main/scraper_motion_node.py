@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 # tilemate_main/scraper_motion_node.py
+#
+# ✅ Option B: "Stop(진짜 취소/정지) -> Resume(앱 레벨 재시작)"
+# - stop_soft 들어오면: MoveStop(외부 interrupt_node에서)로 로봇을 멈추고,
+#   scraper_motion_node는 error로 끝내지 않고 "stopped:<tok>:<checkpoint>"로 종료
+# - resume 들어오면: 컨트롤러 move_resume 호출 ❌ (실패 가능성 큼)
+#   대신 /scraper/resume 토픽으로 재개 요청 -> 저장된 checkpoint부터 남은 시퀀스를 "재실행(restart from checkpoint)"
+#
+# ⚠️ 중요:
+# - stop_soft=True가 계속 유지되면 재개가 불가능하므로, resume 전에 stop_soft는 False로 풀려야 함.
+# - interrupt_node에서는 stop 때 MoveStop, resume 때 /scraper/resume=True publish 하는 구조 권장.
 
 import time
 import traceback
+import threading
+from typing import Any, Dict, Optional
 
 import rclpy
 from rclpy.node import Node
@@ -25,31 +37,44 @@ class _GripperClient:
 
 
 class ScraperMotionNode(Node):
-    """
-    Inputs:
-      - /scraper/run_once (Int32 token)
-      - /task/pause (Bool)
-      - /task/stop_soft (Bool)
-
-    Outputs:
-      - /scraper/status (String): "done:<tok>" or "error:<tok>:<msg>"
-      - /scraper/step (Int32), /scraper/state (String)
-    """
-
     STEP_PREPARE  = 0
     STEP_GRIPPING = 1
     STEP_COATING  = 2
     STEP_FINISH   = 3
+
+    # 그립 폭(예시): 프로젝트에 맞게 유지/조정
+    W_OPEN  = 0.060
+    W_CLOSE = 0.003
+    W_RELEASE = 0.040
 
     def __init__(self, cfg: RobotConfig, boot_node: Node):
         super().__init__("scraper_motion_node", namespace=cfg.robot_id)
         self.cfg = cfg
         self._boot_node = boot_node
 
+        # flags
         self._pause = False
         self._stop_soft = False
-        self._pending_token = None
+
+        # run token (job)
+        self._pending_token: Optional[int] = None
+        self._last_token: Optional[int] = None  # ✅ stopped 후 resume용
+
+        # resume request (Option B)
+        self._resume_requested = False
+
+        # checkpoint (Option B)
+        # 예: {"phase":"COAT","coat_i":2} = 도포 루프에서 2번째 세트까지 완료(다음은 2부터 시작)
+        self._checkpoint: Optional[Dict[str, Any]] = None
+        self._stopped = False  # ✅ stopped 상태인지
+
+        # worker state
         self._running = False
+        self._worker = None
+        self._worker_done = True
+        self._worker_ok = False
+        self._worker_tok: Optional[int] = None
+        self._worker_err = ""   # "stopped" | error string
 
         # pubs
         self.pub_status = self.create_publisher(String, "/scraper/status", 10)
@@ -61,12 +86,14 @@ class ScraperMotionNode(Node):
         self.create_subscription(Bool,  "/task/pause", self._cb_pause, 10)
         self.create_subscription(Bool,  "/task/stop_soft", self._cb_stop_soft, 10)
 
+        # ✅ Option B 전용: resume 토픽
+        self.create_subscription(Bool,  "/scraper/resume", self._cb_resume, 10)
+
         self.gripper = _GripperClient(self)
 
         self._initialize_robot()
         self._set_scraper_status(self.STEP_PREPARE, "대기(run_once 기다리는 중)")
-
-        self.get_logger().info("ScraperMotionNode ready: sub /scraper/run_once")
+        self.get_logger().info("ScraperMotionNode ready: sub /scraper/run_once (+ /scraper/resume)")
 
     # -----------------
     # init / helpers
@@ -78,7 +105,7 @@ class ScraperMotionNode(Node):
         set_tool(self.cfg.tool)
         set_tcp(self.cfg.tcp)
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     def _set_scraper_status(self, step: int, state: str):
         m_step = Int32()
@@ -96,10 +123,51 @@ class ScraperMotionNode(Node):
         self.get_logger().info(f"[SCRAPER->STATUS] {m.data}")
 
     def _wait_if_paused(self):
+        # Pause(일시정지, pause) = 앱 레벨 sleep gate
+        # (블로킹 movel/movej 중에는 즉시 멈추지 못함. 즉시 정지는 interrupt_node에서 MoveStop을 쳐야 함)
         if self._pause:
             self._set_scraper_status(self.STEP_PREPARE, "일시정지(pause)")
         while rclpy.ok() and self._pause and not self._stop_soft:
             time.sleep(0.05)
+
+    def _sleep_interruptible(self, sec: float, dt: float = 0.05) -> bool:
+        t0 = time.time()
+        while (time.time() - t0) < float(sec):
+            if self._stop_soft:
+                return False
+            self._wait_if_paused()
+            time.sleep(float(dt))
+        return True
+
+    def _check_abort(self) -> bool:
+        # stop_soft(취소/정지) 체크
+        if self._stop_soft:
+            self.get_logger().warn("[SCRAPER] stop requested (stop_soft=True)")
+            return True
+        self._wait_if_paused()
+        return bool(self._stop_soft)
+
+    # ---- checkpoint helpers ----
+    def _set_ckpt(self, phase: str, coat_i: int = 0):
+        self._checkpoint = {"phase": str(phase), "coat_i": int(coat_i)}
+        self.get_logger().info(f"[SCRAPER][CKPT] set {self._checkpoint_to_string()}")
+
+    def _checkpoint_to_string(self) -> str:
+        if not self._checkpoint:
+            return "none"
+        phase = self._checkpoint.get("phase", "none")
+        coat_i = int(self._checkpoint.get("coat_i", 0))
+        return f"{phase}:{coat_i}"
+
+    def _parse_checkpoint_string(self, s: str) -> Optional[Dict[str, Any]]:
+        # "COAT:2" 같은 형태 파싱용 (필요 시 사용)
+        try:
+            if not s or s == "none":
+                return None
+            phase, coat_i = s.split(":")
+            return {"phase": phase, "coat_i": int(coat_i)}
+        except Exception:
+            return None
 
     # -----------------
     # callbacks
@@ -119,93 +187,207 @@ class ScraperMotionNode(Node):
         self._stop_soft = bool(msg.data)
         self.get_logger().warn(f"[SCRAPER] stop_soft={self._stop_soft}")
 
+    def _cb_resume(self, msg: Bool):
+        if not bool(msg.data):
+            return
+        self.get_logger().warn("[SCRAPER] resume requested (/scraper/resume)")
+        self._resume_requested = True
+
     # -----------------
-    # tick
+    # tick (worker orchestration)
     # -----------------
     def tick(self):
-        if self._pending_token is None or self._running:
+        # 0) 워커 종료 처리
+        if self._running and self._worker_done:
+            tok = self._worker_tok
+            ok = self._worker_ok
+            err = self._worker_err
+
+            # 정상 완료
+            if ok and not self._stop_soft:
+                self._publish_status(f"done:{tok}")
+                self._stopped = False
+                self._checkpoint = None
+
+            # ✅ stopped (Option B)
+            elif err == "stopped":
+                ck = self._checkpoint_to_string()
+                self._publish_status(f"stopped:{tok}:{ck}")
+                self._stopped = True
+                self._last_token = tok  # resume용 토큰 보관
+
+            # 진짜 에러
+            else:
+                if self._stop_soft and not err:
+                    err = "aborted(stop_soft)"
+                self._publish_status(f"error:{tok}:{err or 'aborted/failed'}")
+                self._stopped = False
+                self._checkpoint = None
+
+            # running state reset (stopped여도 worker는 재시작 가능하도록 상태만 정리)
+            self._running = False
+            self._worker = None
+            self._worker_tok = None
+            self._worker_done = True
+            self._worker_ok = False
+            self._worker_err = ""
             return
 
-        tok = self._pending_token
+        # 1) 워커가 돌고 있으면 아무 것도 안 함
+        if self._running:
+            return
+
+        # 2) ✅ resume 요청 처리 (Option B)
+        # - run_once 없이도 checkpoint부터 재시작
+        if self._resume_requested:
+            self._resume_requested = False
+
+            if self._stop_soft:
+                # stop_soft가 아직 True면 재시작 불가 (계속 abort 될 것)
+                self.get_logger().warn("[SCRAPER] resume ignored: stop_soft=True (set stop_soft False first)")
+                return
+
+            if not self._stopped or self._last_token is None or self._checkpoint is None:
+                self.get_logger().warn(
+                    f"[SCRAPER] resume ignored: not in stopped state (stopped={self._stopped}, "
+                    f"last_token={self._last_token}, ckpt={self._checkpoint_to_string()})"
+                )
+                return
+
+            # stopped 상태에서 재시작
+            tok = int(self._last_token)
+            ckpt = dict(self._checkpoint)
+
+            self.get_logger().warn(f"[SCRAPER] resume start tok={tok} from ckpt={self._checkpoint_to_string()}")
+            self._start_worker(tok=tok, start_ckpt=ckpt, resume_mode=True)
+            return
+
+        # 3) 새 작업 시작 (run_once)
+        if self._pending_token is None:
+            return
+
+        tok = int(self._pending_token)
         self._pending_token = None
 
         if self._stop_soft:
             self.get_logger().warn("[SCRAPER] stop_soft=True -> skip token")
             return
 
+        # 새 작업이면 checkpoint 초기화
+        self._checkpoint = None
+        self._stopped = False
+        self._last_token = tok
+
+        self._start_worker(tok=tok, start_ckpt=None, resume_mode=False)
+
+    def _start_worker(self, tok: int, start_ckpt: Optional[Dict[str, Any]], resume_mode: bool):
         self._running = True
-        try:
-            self._wait_if_paused()
-            if self._stop_soft:
-                self._publish_status(f"error:{tok}:aborted(stop_soft)")
-                return
+        self._worker_done = False
+        self._worker_ok = False
+        self._worker_tok = tok
+        self._worker_err = ""
 
-            self.get_logger().info(f"[SCRAPER] run_once start token={tok}")
-            ok = self._perform_cycle()
+        def _run_worker():
+            try:
+                self._wait_if_paused()
+                if self._stop_soft:
+                    self._worker_ok = False
+                    self._worker_err = "stopped"
+                    return
 
-            if ok and not self._stop_soft:
-                self._publish_status(f"done:{tok}")
-            else:
-                self._publish_status(f"error:{tok}:aborted/failed")
+                self.get_logger().info(f"[SCRAPER] worker start token={tok} resume_mode={resume_mode}")
+                ok = self._perform_cycle(start_ckpt=start_ckpt, resume_mode=resume_mode)
+                self._worker_ok = bool(ok)
 
-        except Exception as e:
-            self.get_logger().error(f"[SCRAPER] exception: {e}")
-            self.get_logger().error(traceback.format_exc())
-            self._publish_status(f"error:{tok}:{e}")
+                if not ok and not self._worker_err:
+                    # stop_soft면 stopped로
+                    if self._stop_soft:
+                        self._worker_err = "stopped"
+                    else:
+                        self._worker_err = "aborted/failed"
 
-        finally:
-            self._running = False
-            # if not self._stop_soft:
-            #     self._set_scraper_status(self.STEP_PREPARE, "대기(run_once 기다리는 중)")
+            except Exception as e:
+                # stop_soft로 인해 컨트롤러가 강제 정지되면 예외가 튈 수 있음 -> stopped로 간주
+                if self._stop_soft:
+                    self.get_logger().warn(f"[SCRAPER] exception during stop -> treat as stopped: {e}")
+                    self._worker_ok = False
+                    self._worker_err = "stopped"
+                else:
+                    self.get_logger().error(f"[SCRAPER] exception in worker: {e}")
+                    self.get_logger().error(traceback.format_exc())
+                    self._worker_ok = False
+                    self._worker_err = str(e)
+
+            finally:
+                self._worker_done = True
+
+        self._worker = threading.Thread(target=_run_worker, daemon=True)
+        self._worker.start()
 
     # -----------------
-    # DSR motions
+    # DSR motions (runs in worker thread)
     # -----------------
-    def _perform_cycle(self) -> bool:
+    def _perform_cycle(self, start_ckpt: Optional[Dict[str, Any]], resume_mode: bool) -> bool:
         from DSR_ROBOT2 import (
-            posx,
-            posj,
-            movej,
-            movel,
-            get_current_posx,
-            add_tcp,
-            set_tcp,
-            set_robot_mode,
-            # 순응/힘제어
-            release_compliance_ctrl,
-            task_compliance_ctrl,
-            set_desired_force,
-            check_force_condition,
-            DR_TOOL,
-            DR_BASE,
-            DR_WORLD,
-            DR_FC_MOD_ABS,
-            ROBOT_MODE_MANUAL,
-            ROBOT_MODE_AUTONOMOUS,
+            posx, posj, movej, movel, get_current_posx,
+            add_tcp, set_tcp, set_robot_mode,
+            release_compliance_ctrl, task_compliance_ctrl, set_desired_force,
+            DR_TOOL, DR_BASE, DR_WORLD, DR_FC_MOD_ABS,
+            ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS,
         )
 
-        def set_gripper(w: float):
-            self.gripper.set_width(w)
-            time.sleep(0.05)
+        # ---- wrappers: stop_soft면 "stopped"로 빠지기 ----
+        def safe_movej(*args, **kwargs) -> bool:
+            if self._check_abort():
+                self._worker_err = "stopped"
+                return False
+            try:
+                movej(*args, **kwargs)
+                return True
+            except Exception as e:
+                if self._stop_soft:
+                    self._worker_err = "stopped"
+                    return False
+                self._worker_err = f"movej failed: {e}"
+                return False
 
-        # ✅ 베이스 좌표계 기준 상대 좌표 이동 (사용자 수정본 유지)
-        def move_relative(dx: float, dy: float, dz: float):
+        def safe_movel(*args, **kwargs) -> bool:
+            if self._check_abort():
+                self._worker_err = "stopped"
+                return False
+            try:
+                movel(*args, **kwargs)
+                return True
+            except Exception as e:
+                if self._stop_soft:
+                    self._worker_err = "stopped"
+                    return False
+                self._worker_err = f"movel failed: {e}"
+                return False
+
+        def set_gripper(w: float) -> bool:
+            if self._check_abort():
+                self._worker_err = "stopped"
+                return False
+            self.gripper.set_width(w)
+            return self._sleep_interruptible(0.05)
+
+        def move_relative(dx: float, dy: float, dz: float) -> bool:
+            if self._check_abort():
+                self._worker_err = "stopped"
+                return False
             cur, _ = get_current_posx(DR_BASE)
             target = [cur[0] + dx, cur[1] + dy, cur[2] + dz, cur[3], cur[4], cur[5]]
-            movel(posx(target), ref=DR_BASE, vel=30, acc=30)
-            time.sleep(0.5)
+            if not safe_movel(posx(target), ref=DR_BASE, vel=30, acc=30):
+                return False
+            return self._sleep_interruptible(0.2)
 
-        # ----------------------------
-        # 순응/힘제어 유틸 (안전 접촉 -> 힘 유지)
-        # ----------------------------
         def enable_soft_touch_compliance(stx=(4000, 4000, 80, 200, 200, 200)):
-            # 힘 없이(Z만 매우 부드럽게) 접촉 만들기용
             task_compliance_ctrl(stx=list(stx), time=0.0)
 
         def enable_press_force(fz=-20.0):
-            # 접촉 이후 계속 누르기(압력 유지)
             fd = [0.0, 0.0, float(fz), 0.0, 0.0, 0.0]
-            direction = [0, 0, 1, 0, 0, 0]  # TCP Z축 방향
+            direction = [0, 0, 1, 0, 0, 0]
             set_desired_force(fd, direction, 0, DR_FC_MOD_ABS)
 
         def disable_compliance():
@@ -214,53 +396,62 @@ class ScraperMotionNode(Node):
             except Exception:
                 pass
 
-        def approach_until_contact_world_z(
-            axis=2,               # 0:x 1:y 2:z
-            threshold=4.0,        # N
-            max_down_mm=15.0,
-            step_mm=0.5,
-            timeout_sec=8.0,
-        ):
-            """
-            ✅ 월드(DR_WORLD) 기준 Z로 상대 하강하면서
-            ✅ get_tool_force()로 비블로킹 접촉 판정
-            """
-            import DSR_ROBOT2 as dr
-            from DSR_ROBOT2 import posx, movel, get_current_posx, DR_WORLD
+        def safe_recover(pre_mid_pose) -> bool:
+            # ✅ 앱 레벨 resume: stop으로 중간에 멈췄을 수 있으니 간섭 피해서 안전 위치로 복귀
+            disable_compliance()
+            if self._check_abort():
+                self._worker_err = "stopped"
+                return False
+            try:
+                cur, _ = get_current_posx(DR_WORLD)
+                lift = [cur[0], cur[1], cur[2] + 20.0, cur[3], cur[4], cur[5]]
+                safe_movel(posx(lift), ref=DR_WORLD, vel=10, acc=10)
+                self._sleep_interruptible(0.1)
+            except Exception:
+                # 리프트 실패해도 pre_mid로 시도
+                pass
+            if not safe_movel(pre_mid_pose, vel=30, acc=30):
+                return False
+            return self._sleep_interruptible(0.2)
 
+        # ---- contact helper (필요 시 유지) ----
+        def approach_until_contact_world_z(
+            axis=2, threshold=4.0, max_down_mm=15.0, step_mm=0.5, timeout_sec=8.0
+        ) -> bool:
+            import DSR_ROBOT2 as dr
             if not hasattr(dr, "get_tool_force"):
-                self.get_logger().warn("[TOUCH] get_tool_force() not found -> fallback: just go down w/o contact detect")
-                # fallback: 그냥 max_down_mm만큼 내려가기
                 cur, _ = get_current_posx(DR_WORLD)
                 target = [cur[0], cur[1], cur[2] - float(max_down_mm), cur[3], cur[4], cur[5]]
-                movel(posx(target), ref=DR_WORLD, vel=3, acc=3)
+                safe_movel(posx(target), ref=DR_WORLD, vel=3, acc=3)
                 return False
 
             t0 = time.time()
             moved = 0.0
-
-            while moved < max_down_mm:
-                if self._stop_soft:
+            while moved < float(max_down_mm):
+                if self._check_abort():
+                    self._worker_err = "stopped"
                     return False
-                self._wait_if_paused()
-
                 if (time.time() - t0) > float(timeout_sec):
                     self.get_logger().warn("[TOUCH] timeout -> no contact detected")
                     return False
 
-                d = min(step_mm, max_down_mm - moved)
-
+                d = min(float(step_mm), float(max_down_mm) - moved)
                 cur, _ = get_current_posx(DR_WORLD)
                 target = [cur[0], cur[1], cur[2] - d, cur[3], cur[4], cur[5]]
-                movel(posx(target), ref=DR_WORLD, vel=3, acc=3)
+                if not safe_movel(posx(target), ref=DR_WORLD, vel=3, acc=3):
+                    return False
 
                 moved += d
-                time.sleep(0.02)
+                if not self._sleep_interruptible(0.02):
+                    self._worker_err = "stopped"
+                    return False
 
                 try:
                     f = dr.get_tool_force()
                     raw = float(f[axis])
-                    self.get_logger().info(f"[TOUCH] force[{axis}]={raw:.2f}N thr={threshold:.2f}N moved={moved:.1f}mm")
+                    self.get_logger().info(
+                        f"[TOUCH] force[{axis}]={raw:.2f}N thr={threshold:.2f}N moved={moved:.1f}mm"
+                    )
                     if abs(raw) >= float(threshold):
                         self.get_logger().info("[TOUCH] contact detected")
                         return True
@@ -268,30 +459,35 @@ class ScraperMotionNode(Node):
                     self.get_logger().warn(f"[TOUCH] force read failed: {e}")
 
             return False
-        # ----------------------------
-        # 왕복하며 펴바르기 (기존 유지)
-        # ----------------------------
-        def do_stroke():
-            movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0)
-            time.sleep(0.2)
 
-            move_relative(0.0, 120.0, 0.0)
-            time.sleep(0.2)
+        def do_stroke() -> bool:
+            # 한 번 stroke 시퀀스
+            if self._check_abort():
+                self._worker_err = "stopped"
+                return False
 
-            movel(posx([0, 0, 0, 0, 40, 0]), ref=DR_TOOL, time=5.0)
-            time.sleep(0.2)
+            if not safe_movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0):
+                return False
+            if not self._sleep_interruptible(0.2): return False
 
-            move_relative(0.0, -180.0, 0.0)
-            time.sleep(0.2)
+            if not move_relative(0.0, 120.0, 0.0): return False
+            if not self._sleep_interruptible(0.2): return False
 
-            movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0)
-            time.sleep(0.2)
+            if not safe_movel(posx([0, 0, 0, 0, 40, 0]), ref=DR_TOOL, time=5.0):
+                return False
+            if not self._sleep_interruptible(0.2): return False
 
-        # ----------------------------
-        # positions
-        # ----------------------------
+            if not move_relative(0.0, -180.0, 0.0): return False
+            if not self._sleep_interruptible(0.2): return False
+
+            if not safe_movel(posx([0, 0, 0, 0, -20, 0]), ref=DR_TOOL, time=5.0):
+                return False
+            if not self._sleep_interruptible(0.2): return False
+
+            return True
+
+        # ---- positions ----
         JReady = [0, 0, 90, 0, 90, 0]
-
         pre_grasp = posx([608.63, 69.05, 210.0,  52.0011, 179.0943,  52.3476])
         grasp     = posx([608.63, 69.05, 173.76, 52.0011, 179.0943,  52.3476])
 
@@ -299,95 +495,154 @@ class ScraperMotionNode(Node):
         mid     = posx([480.8698, 91.12, 190.0, 59.9196, 179.1564, 60.5511])
         rotate  = posj([6.671, 16.319, 72.358, 0.566, 90.818, 95.63])
 
-        # ----------------------------
-        # 준비
-        # ----------------------------
-        self._set_scraper_status(self.STEP_PREPARE, "스크래퍼 파지 준비")
-        movej(JReady, vel=self.cfg.vel, acc=self.cfg.acc)
-        set_gripper(0.060)
-        time.sleep(2.0)
+        # ---- checkpoint init ----
+        ck = start_ckpt or self._checkpoint or {"phase": "PREPARE", "coat_i": 0}
 
-        # ----------------------------
-        # 파지
-        # ----------------------------
-        self._set_scraper_status(self.STEP_GRIPPING, "스크래퍼 파지중")
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
-        movel(grasp, vel=60, acc=60); time.sleep(1.0)
-        set_gripper(0.003); time.sleep(4.0)
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
+        # ✅ resume_mode일 때 안전 복귀 (중간 stop 상태일 수 있으니까)
+        if resume_mode:
+            self._set_scraper_status(self.STEP_PREPARE, f"재개(resume) 복귀중 ckpt={ck.get('phase')}:{ck.get('coat_i',0)}")
+            if not safe_recover(pre_mid_pose=pre_mid):
+                return False
 
-        # ----------------------------
-        # 이동
-        # ----------------------------
-        movel(pre_mid, vel=60, acc=60); time.sleep(1.0)
-        movel(mid, vel=60, acc=60); time.sleep(1.0)
-        movej(rotate, vel=40, acc=40); time.sleep(1.0)
+        # =========================
+        # PHASE: PREPARE
+        # =========================
+        if ck["phase"] == "PREPARE":
+            self._set_scraper_status(self.STEP_PREPARE, "스크래퍼 파지 준비")
+            if not safe_movej(JReady, vel=self.cfg.vel, acc=self.cfg.acc):
+                return False
+            if not set_gripper(self.W_OPEN): return False
+            if not self._sleep_interruptible(2.0): return False
 
-        # ----------------------------
-        # 도포: TCP + 안전접촉(순응만) -> 힘유지 -> 스트로크
-        # ----------------------------
-        try:
-            # TCP 오프셋 추가
-            set_robot_mode(ROBOT_MODE_MANUAL)
-            tcp_name = "scraper"
-            tcp_offset = [0, 0, 224.911 + 52.0, 0, 0, 0]
-            add_tcp(tcp_name, tcp_offset)
-            set_tcp(tcp_name)
-            set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-            time.sleep(0.2)
+            self._set_ckpt("GRIP", 0)
+            ck = {"phase": "GRIP", "coat_i": 0}
 
-            self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
+        # =========================
+        # PHASE: GRIP
+        # =========================
+        if ck["phase"] == "GRIP":
+            self._set_scraper_status(self.STEP_GRIPPING, "스크래퍼 파지중")
+            if not safe_movel(pre_grasp, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not safe_movel(grasp, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not set_gripper(self.W_CLOSE): return False
+            if not self._sleep_interruptible(4.0): return False
+            if not safe_movel(pre_grasp, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
 
-            # 1) ✅ 힘 없이 컴플라이언스만 켜고(충격 완화) 살살 접촉 만들기
-            enable_soft_touch_compliance(stx=(4000, 4000, 80, 200, 200, 200))
-            approach_until_contact_world_z(threshold=4.0, max_down_mm=15.0, step_mm=0.5)
+            self._set_ckpt("MOVE", 0)
+            ck = {"phase": "MOVE", "coat_i": 0}
 
-            # 2) ✅ 접촉 후에 목표힘 ON (계속 아래로 누르면서 유지)
-            enable_press_force(fz=-5.0) 
-            ##############################################################
-            # 튜닝 값
-            ##############################################################
+        # =========================
+        # PHASE: MOVE (to coating area)
+        # =========================
+        if ck["phase"] == "MOVE":
+            if not safe_movel(pre_mid, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not safe_movel(mid, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not safe_movej(rotate, vel=40, acc=40): return False
+            if not self._sleep_interruptible(1.0): return False
 
+            self._set_ckpt("COAT", 0)
+            ck = {"phase": "COAT", "coat_i": 0}
 
-            # 3) 스트로크(이동 중에도 힘 유지 + Z는 순응)
-            do_stroke()
-
-            move_relative(-50.0, 80.0, 0.0)
-            do_stroke()
-
-            move_relative(100.0, 80.0, 0.0)
-            do_stroke()
-
-        finally:
-            # 순응/힘 OFF
-            disable_compliance()
-
-            # TCP 원복
+        # =========================
+        # PHASE: COAT (checkpoint-able)
+        # =========================
+        if ck["phase"] == "COAT":
+            # tcp 바꾸고, compliance/force 설정 후 도포
             try:
                 set_robot_mode(ROBOT_MODE_MANUAL)
-                set_tcp(self.cfg.tcp)
+                tcp_name = "scraper"
+                tcp_offset = [0, 0, 224.911 + 52.0, 0, 0, 0]
+                try:
+                    add_tcp(tcp_name, tcp_offset)
+                except Exception as e:
+                    self.get_logger().warn(f"[SCRAPER] add_tcp warn (maybe exists): {e}")
+                set_tcp(tcp_name)
                 set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-            except Exception:
-                pass
+                if not self._sleep_interruptible(0.2): return False
 
-        # ----------------------------
-        # 반납
-        # ----------------------------
-        self._set_scraper_status(self.STEP_FINISH, "접착제 도포 끝")
-        movel(pre_mid, vel=60, acc=60); time.sleep(1.0)
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
-        movel(grasp, vel=60, acc=60); time.sleep(1.0)
-        set_gripper(0.040); time.sleep(4.0)
-        movel(pre_grasp, vel=60, acc=60); time.sleep(1.0)
+                self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
 
-        return True
+                enable_soft_touch_compliance(stx=(4000, 4000, 80, 200, 200, 200))
+                approach_until_contact_world_z(threshold=4.0, max_down_mm=15.0, step_mm=0.5)
+
+                if self._check_abort():
+                    self._worker_err = "stopped"
+                    return False
+                enable_press_force(fz=-5.0)
+
+                # ✅ 도포 3세트(예시): (stroke) -> move_relative -> (stroke) -> move_relative -> (stroke)
+                # checkpoint: coat_i = "완료한 세트 수" (다음 시작 인덱스)
+                start_i = int(ck.get("coat_i", 0))
+                if start_i < 0: start_i = 0
+                if start_i > 3: start_i = 3
+
+                for i in range(start_i, 3):
+                    # i번째 세트 시작
+                    self.get_logger().info(f"[SCRAPER][COAT] set {i+1}/3 start")
+
+                    if not do_stroke():
+                        return False
+
+                    # ✅ i번째 세트 완료 -> checkpoint advance
+                    self._set_ckpt("COAT", i + 1)
+
+                    # 세트 사이 이동(마지막 세트 뒤에는 없음)
+                    if i == 0:
+                        if not move_relative(-50.0, 80.0, 0.0): return False
+                    elif i == 1:
+                        if not move_relative(100.0, 80.0, 0.0): return False
+
+                # 도포 완료
+                self._set_ckpt("RETURN", 3)
+                ck = {"phase": "RETURN", "coat_i": 3}
+
+            finally:
+                disable_compliance()
+                try:
+                    set_robot_mode(ROBOT_MODE_MANUAL)
+                    set_tcp(self.cfg.tcp)
+                    set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+                except Exception:
+                    pass
+
+        # =========================
+        # PHASE: RETURN (put back)
+        # =========================
+        if ck["phase"] == "RETURN":
+            self._set_scraper_status(self.STEP_FINISH, "접착제 도포 끝")
+            if not safe_movel(pre_mid, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not safe_movel(pre_grasp, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not safe_movel(grasp, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+            if not set_gripper(self.W_RELEASE): return False
+            if not self._sleep_interruptible(4.0): return False
+            if not safe_movel(pre_grasp, vel=60, acc=60): return False
+            if not self._sleep_interruptible(1.0): return False
+
+            self._set_ckpt("DONE", 0)
+            return True
+
+        # DONE
+        if ck["phase"] == "DONE":
+            return True
+
+        # 알 수 없는 phase
+        self._worker_err = f"unknown checkpoint phase: {ck.get('phase')}"
+        return False
 
 
 def main(args=None):
     rclpy.init(args=args)
     cfg = RobotConfig()
 
-    # ✅ DSR_ROBOT2 import 전에 boot node 먼저 만들고 DR_init.__dsr__node 세팅
+    # boot node (DSR 내부에서 spin 돌린다는 전제 유지)
     boot = rclpy.create_node("dsr_boot_scraper", namespace=cfg.robot_id)
     DR_init.__dsr__id = cfg.robot_id
     DR_init.__dsr__model = cfg.robot_model
@@ -397,11 +652,20 @@ def main(args=None):
 
     node = ScraperMotionNode(cfg, boot)
 
+    # ✅ 고정 executor
+    from rclpy.executors import SingleThreadedExecutor
+    ex = SingleThreadedExecutor()
+    ex.add_node(node)
+
     try:
         while rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=0.1)
+            ex.spin_once(timeout_sec=0.1)
             node.tick()
     finally:
+        try:
+            ex.remove_node(node)
+        except Exception:
+            pass
         try:
             node.destroy_node()
             boot.destroy_node()

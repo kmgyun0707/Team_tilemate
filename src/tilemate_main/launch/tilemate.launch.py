@@ -34,10 +34,10 @@ def generate_launch_description():
             output="screen",
         ),
         # 4) /robot/command 중 stop/pause/reset에 대해 MoveStop 호출(하드정지)
-        Node(
-            package="tilemate_main",
-            executable="command_node",
-            name="command_node",
-            output="screen",
-        ),
+        # Node(
+        #     package="tilemate_main",
+        #     executable="command_node",
+        #     name="command_node",
+        #     output="screen",
+        # ),
     ])

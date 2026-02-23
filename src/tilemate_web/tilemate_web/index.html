@@ -214,6 +214,34 @@
             <button class="popup-cancel" onclick="closePopup()">취소</button>
         </div>
     </div>
+
+    <!-- 커스텀 패턴 입력 팝업 (데코타일 선택 시) -->
+    <div class="popup-overlay" id="custom-pattern-popup">
+        <div class="popup-box" style="width: 480px;">
+            <h2>🎨 커스텀 패턴 입력</h2>
+            <p style="text-align:center; color:#555; margin-bottom: 20px;">
+                각 타일에 <strong>A</strong> (흰색) 또는 <strong>B</strong> (검정) 를 입력하세요.<br>
+                <small style="color:#999;">순서: 왼쪽→오른쪽, 위→아래 (9칸)</small>
+            </p>
+
+            <!-- 3x3 입력 그리드 -->
+            <div id="custom-input-grid" style="
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 10px;
+                margin-bottom: 20px;
+            "></div>
+
+            <!-- 미리보기 -->
+            <div style="text-align:center; margin-bottom: 16px;">
+                <p style="font-weight:bold; color:#1a237e; margin-bottom: 8px;">미리보기</p>
+                <div id="custom-preview-grid" class="preview-grid" style="margin: 0 auto;"></div>
+            </div>
+
+            <button class="popup-confirm" onclick="confirmCustomPattern()">패턴 적용</button>
+            <button class="popup-cancel" onclick="backToDesignPopup()">← 뒤로</button>
+        </div>
+    </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
@@ -478,6 +506,7 @@
 
     function closePopup() {
         document.getElementById('design-popup').classList.remove('show');
+        document.getElementById('custom-pattern-popup').classList.remove('show');
     }
 
     function selectDesign(n) {
@@ -488,6 +517,14 @@
 
     function confirmDesign() {
         if (!selectedDesign) { alert('패턴을 선택해주세요!'); return; }
+
+        // design 3: 커스텀 패턴 입력 팝업으로 전환
+        if (selectedDesign === 3) {
+            document.getElementById('design-popup').classList.remove('show');
+            openCustomPatternPopup();
+            return;
+        }
+
         closePopup();
         // robot_command에 action + design 번호 함께 전송
         database.ref('robot_command').set({ action: 'start', design: selectedDesign, timestamp: Date.now() });
@@ -500,10 +537,104 @@
             firstTile.innerText = '작업중';
         }
     }
+
+    // ── 커스텀 패턴 팝업 ────────────────────────────────────
+    const customValues = new Array(9).fill('A'); // 기본값 A
+
+    function openCustomPatternPopup() {
+        customValues.fill('A'); // 초기화
+        const grid = document.getElementById('custom-input-grid');
+        grid.innerHTML = '';
+        for (let i = 0; i < 9; i++) {
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'display:flex; flex-direction:column; align-items:center; gap:6px;';
+
+            const label = document.createElement('div');
+            label.style.cssText = 'font-size:0.8em; color:#888;';
+            label.innerText = `타일 ${i+1}`;
+
+            const btn = document.createElement('button');
+            btn.id = `custom-btn-${i}`;
+            btn.style.cssText = `
+                width: 60px; height: 60px; font-size: 1.4em; font-weight: bold;
+                border-radius: 10px; cursor: pointer; border: 3px solid;
+                transition: 0.2s; flex: unset; padding: 0;
+            `;
+            btn.innerText = customValues[i];
+            applyCustomBtnStyle(btn, customValues[i]);
+
+            btn.onclick = () => {
+                customValues[i] = customValues[i] === 'A' ? 'B' : 'A';
+                btn.innerText = customValues[i];
+                applyCustomBtnStyle(btn, customValues[i]);
+                updateCustomPreview();
+            };
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(btn);
+            grid.appendChild(wrapper);
+        }
+        updateCustomPreview();
+        document.getElementById('custom-pattern-popup').classList.add('show');
+    }
+
+    function applyCustomBtnStyle(btn, val) {
+        if (val === 'A') {
+            btn.style.background = '#ffffff';
+            btn.style.color = '#333';
+            btn.style.borderColor = '#aaa';
+        } else {
+            btn.style.background = '#212121';
+            btn.style.color = '#fff';
+            btn.style.borderColor = '#000';
+        }
+    }
+
+    function updateCustomPreview() {
+        const pg = document.getElementById('custom-preview-grid');
+        pg.innerHTML = '';
+        customValues.forEach(v => {
+            const cell = document.createElement('div');
+            cell.className = 'preview-cell ' + (v === 'B' ? 'pc-black' : '');
+            pg.appendChild(cell);
+        });
+    }
+
+    function confirmCustomPattern() {
+        // A=흰색 B=검정 → firebase_bridge가 /robot/design_ab에 publish
+        const patternStr = customValues.join(','); // 예: "A,B,A,B,A,B,A,B,A"
+        closePopup();
+
+        database.ref('robot_command').set({
+            action: 'start',
+            design: 3,
+            custom_pattern: patternStr,
+            timestamp: Date.now()
+        });
+
+        // DESIGN_COLORS에 커스텀 패턴 반영 (3D/2D 색상용)
+        DESIGN_COLORS[3] = customValues.map(v => v === 'B' ? 'B' : 'W');
+
+        isStarted = true;
+        if (!timerInterval) startTimer();
+        const firstTile = document.getElementById('tile-1');
+        if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
+            firstTile.classList.add('working');
+            firstTile.innerText = '작업중';
+        }
+    }
+
+    function backToDesignPopup() {
+        document.getElementById('custom-pattern-popup').classList.remove('show');
+        document.getElementById('design-popup').classList.add('show');
+    }
+
     window.openDesignPopup = openDesignPopup;
     window.closePopup = closePopup;
     window.selectDesign = selectDesign;
     window.confirmDesign = confirmDesign;
+    window.confirmCustomPattern = confirmCustomPattern;
+    window.backToDesignPopup = backToDesignPopup;
 
     // -------------------------------------------------------
     // 버튼 커맨드

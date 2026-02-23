@@ -146,9 +146,20 @@ class FirebaseBridgeNode(Node):
                                 )
                                 self.ref.update({"design_ab": STRAIGHT_PATTERN})
                             else:
-                                self.get_logger().info(
-                                    f"[DESIGN_AB] design={design_int} -> No pattern published (only design=1 or 2 has patterns)"
-                                )
+                                # 웹에서 직접 입력한 커스텀 패턴 사용
+                                custom_pattern = cmd.get("custom_pattern", None)
+                                if custom_pattern:
+                                    ab_msg = String()
+                                    ab_msg.data = custom_pattern
+                                    self._pub_design_ab.publish(ab_msg)
+                                    self.get_logger().info(
+                                        f"[DESIGN_AB] design=3 (custom) -> /robot/design_ab publish: '{custom_pattern}'"
+                                    )
+                                    self.ref.update({"design_ab": custom_pattern})
+                                else:
+                                    self.get_logger().warn(
+                                        "[DESIGN_AB] design=3 but no custom_pattern in Firebase! /robot/design_ab NOT published."
+                                    )
 
                         # reset이면 Firebase robot_status 전체 초기화
                         if action == "reset":

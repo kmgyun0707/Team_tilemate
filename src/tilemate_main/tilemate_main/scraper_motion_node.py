@@ -215,40 +215,59 @@ class ScraperMotionNode(Node):
                 pass
 
         def approach_until_contact_world_z(
-            axis=2,
-            threshold=4.0,
+            axis=2,               # 0:x 1:y 2:z
+            threshold=4.0,        # N
             max_down_mm=15.0,
             step_mm=0.5,
+            timeout_sec=8.0,
         ):
             """
-            ✅ 월드(DR_WORLD) 기준 Z로 '상대 하강'
-            - posx([0,0,-d,...])는 절대좌표로 해석될 수 있어서 사용 금지
-            - 현재 월드 포즈를 읽고 Z만 줄인 절대 목표를 반복 movel
+            ✅ 월드(DR_WORLD) 기준 Z로 상대 하강하면서
+            ✅ get_tool_force()로 비블로킹 접촉 판정
             """
+            import DSR_ROBOT2 as dr
+            from DSR_ROBOT2 import posx, movel, get_current_posx, DR_WORLD
+
+            if not hasattr(dr, "get_tool_force"):
+                self.get_logger().warn("[TOUCH] get_tool_force() not found -> fallback: just go down w/o contact detect")
+                # fallback: 그냥 max_down_mm만큼 내려가기
+                cur, _ = get_current_posx(DR_WORLD)
+                target = [cur[0], cur[1], cur[2] - float(max_down_mm), cur[3], cur[4], cur[5]]
+                movel(posx(target), ref=DR_WORLD, vel=3, acc=3)
+                return False
+
+            t0 = time.time()
             moved = 0.0
+
             while moved < max_down_mm:
+                if self._stop_soft:
+                    return False
+                self._wait_if_paused()
+
+                if (time.time() - t0) > float(timeout_sec):
+                    self.get_logger().warn("[TOUCH] timeout -> no contact detected")
+                    return False
+
                 d = min(step_mm, max_down_mm - moved)
 
-                cur, _ = get_current_posx(DR_WORLD)  # [x,y,z,rx,ry,rz]
+                cur, _ = get_current_posx(DR_WORLD)
                 target = [cur[0], cur[1], cur[2] - d, cur[3], cur[4], cur[5]]
                 movel(posx(target), ref=DR_WORLD, vel=3, acc=3)
 
                 moved += d
-                time.sleep(0.05)
+                time.sleep(0.02)
 
-                # 접촉 체크(가능하면)
                 try:
-                    if check_force_condition(axis=axis, min=threshold):
+                    f = dr.get_tool_force()
+                    raw = float(f[axis])
+                    self.get_logger().info(f"[TOUCH] force[{axis}]={raw:.2f}N thr={threshold:.2f}N moved={moved:.1f}mm")
+                    if abs(raw) >= float(threshold):
+                        self.get_logger().info("[TOUCH] contact detected")
                         return True
-                except TypeError:
-                    try:
-                        if check_force_condition(axis, threshold):
-                            return True
-                    except Exception:
-                        pass
+                except Exception as e:
+                    self.get_logger().warn(f"[TOUCH] force read failed: {e}")
 
-            return True
-
+            return False
         # ----------------------------
         # 왕복하며 펴바르기 (기존 유지)
         # ----------------------------

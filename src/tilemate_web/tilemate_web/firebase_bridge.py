@@ -60,6 +60,7 @@ class FirebaseBridgeNode(Node):
         # ── Publisher: 웹 명령 → 로봇 ──────────────────────
         self._pub_cmd    = self.create_publisher(String, '/robot/command', 10)
         self._pub_design = self.create_publisher(Int32,  '/robot/design',  10)
+        self._pub_design_ab = self.create_publisher(String,  '/robot/design_ab',  10)
 
         # ── Subscriber: 로봇 상태 → Firebase ──────────────
         # /robot/design 은 여기서 subscribe 안 함 (bridge가 publish 전용)
@@ -72,7 +73,7 @@ class FirebaseBridgeNode(Node):
 
         self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, "
                                "/robot/completed_jobs, /robot/speed, /robot/collision_sensitivity")
-        self.get_logger().info("Publishing: /robot/command, /robot/design")
+        self.get_logger().info("Publishing: /robot/command, /robot/design,/robot/design_ab")
 
         # TCP throttle
         self._last_tcp_update = 0.0
@@ -117,14 +118,38 @@ class FirebaseBridgeNode(Node):
 
                         # start 명령이면:
                         if action == "start" and design is not None:
-                            # 1) /robot/design publish → 로봇 구동 코드가 받아서 움직임 결정
-                            d_msg = Int32()
-                            d_msg.data = int(design)
-                            self._pub_design.publish(d_msg)
-                            self.get_logger().info(f"[DESIGN] design={design} → /robot/design publish")
+                            design_int = int(design)
 
-                            # 2) robot_status/design 도 bridge가 직접 업데이트 (웹 3D 색상용)
-                            self.ref.update({"design": int(design)})
+                            # 1) /robot/design publish (항상 숫자 그대로)
+                            d_msg = Int32()
+                            d_msg.data = design_int
+                            self._pub_design.publish(d_msg)
+                            self.get_logger().info(
+                                f"[DESIGN] design={design_int} -> /robot/design publish"
+                            )
+
+                            # 2) /robot/design_ab publish (design=1 지그재그 전용)
+                            # B 흰 A 검
+                            if design_int == 1:
+                                ZIGZAG_PATTERN = "B,A,B,A,B,A,B,A,B" # 흰검흰검흰검흰검흰 (흰5검4)
+                                ab_msg = String()
+                                ab_msg.data = ZIGZAG_PATTERN
+                                self._pub_design_ab.publish(ab_msg)
+                                self.get_logger().info(
+                                    f"[DESIGN_AB] design=1 -> /robot/design_ab publish: '{ZIGZAG_PATTERN}'"
+                                )
+                            elif design_int == 2:
+                                STRAIGHT_PATTERN = "B,B,B,A,A,A,B,B,B" # 흰흰흰검검검흰흰흰 (흰6검3)
+                                ab_msg = String()
+                                ab_msg.data = STRAIGHT_PATTERN
+                                self._pub_design_ab.publish(ab_msg)
+                                self.get_logger().info(
+                                    f"[DESIGN_AB] design=2 -> /robot/design_ab publish: '{STRAIGHT_PATTERN}'"
+                                )
+                            else:
+                                self.get_logger().info(
+                                    f"[DESIGN_AB] design={design_int} -> No pattern published (only design=1 or 2 has patterns)"
+                                )
 
                         # reset이면 Firebase robot_status 전체 초기화
                         if action == "reset":

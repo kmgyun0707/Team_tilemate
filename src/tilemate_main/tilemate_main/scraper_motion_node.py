@@ -42,7 +42,7 @@ class ScraperMotionNode(Node):
     STEP_COATING  = 2
     STEP_FINISH   = 3
 
-    # 그립 폭(예시): 프로젝트에 맞게 유지/조정
+    # 그립 폭: 
     W_OPEN  = 0.060
     W_CLOSE = 0.003
     W_RELEASE = 0.040
@@ -58,7 +58,7 @@ class ScraperMotionNode(Node):
 
         # run token (job)
         self._pending_token: Optional[int] = None
-        self._last_token: Optional[int] = None  # ✅ stopped 후 resume용
+        self._last_token: Optional[int] = None  #  stopped 후 resume용
 
         # resume request (Option B)
         self._resume_requested = False
@@ -66,7 +66,7 @@ class ScraperMotionNode(Node):
         # checkpoint (Option B)
         # 예: {"phase":"COAT","coat_i":2} = 도포 루프에서 2번째 세트까지 완료(다음은 2부터 시작)
         self._checkpoint: Optional[Dict[str, Any]] = None
-        self._stopped = False  # ✅ stopped 상태인지
+        self._stopped = False  #  stopped 상태인지
 
         # worker state
         self._running = False
@@ -83,17 +83,17 @@ class ScraperMotionNode(Node):
 
         # subs
         self.create_subscription(Int32, "/scraper/run_once", self._cb_run_once, 10)
+        self.create_subscription(Bool,  "/scraper/resume", self._cb_resume, 10)
+
         self.create_subscription(Bool,  "/task/pause", self._cb_pause, 10)
         self.create_subscription(Bool,  "/task/stop_soft", self._cb_stop_soft, 10)
 
-        # ✅ Option B 전용: resume 토픽
-        self.create_subscription(Bool,  "/scraper/resume", self._cb_resume, 10)
 
         self.gripper = _GripperClient(self)
 
         self._initialize_robot()
-        self._set_scraper_status(self.STEP_PREPARE, "대기(run_once 기다리는 중)")
-        self.get_logger().info("ScraperMotionNode ready: sub /scraper/run_once (+ /scraper/resume)")
+        self._set_scraper_status(self.STEP_PREPARE, "작업명령 대기중")
+        self.get_logger().info("ScraperMotionNode ready!!!")
 
     # -----------------
     # init / helpers
@@ -237,7 +237,7 @@ class ScraperMotionNode(Node):
         if self._running:
             return
 
-        # 2) ✅ resume 요청 처리 (Option B)
+        # 2) ✅ resume 요청 처리 
         # - run_once 없이도 checkpoint부터 재시작
         if self._resume_requested:
             self._resume_requested = False

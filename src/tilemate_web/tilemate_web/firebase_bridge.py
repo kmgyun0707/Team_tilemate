@@ -9,7 +9,11 @@
 #   /robot/completed_jobs           (std_msgs/Int32)
 #   /robot/speed                    (std_msgs/Int32)
 #   /robot/collision_sensitivity    (std_msgs/Int32)
+#   /dsr01/joint_states             (sensor_msgs/JointState) → joint_speed
 #   ※ /robot/design 은 subscribe 안 함 (bridge가 publish 전용)
+#
+# 서비스 콜 (주기적):
+#   /dsr01/aux_control/get_tool_force → tool_force, force_z
 #
 # 발행 토픽 (Firebase → 로봇):
 #   /robot/command   (std_msgs/String)  "start" | "stop" | "reset"
@@ -21,6 +25,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32, String, Float32MultiArray
 from sensor_msgs.msg import JointState
+from dsr_msgs2.srv import GetToolForce
 
 import firebase_admin
 from firebase_admin import credentials, db
@@ -46,7 +51,7 @@ class FirebaseBridgeNode(Node):
             cred = credentials.Certificate(SERVICE_ACCOUNT_KEY_PATH)
             firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})
         self.ref     = db.reference("/robot_status")
-        self.cmd_ref = db.reference("/robot_command")  # 전체 객체 읽기 (action + design)
+        self.cmd_ref = db.reference("/robot_command")
         self.get_logger().info("Firebase Connected!")
 
         # Firebase 초기 상태
@@ -57,53 +62,79 @@ class FirebaseBridgeNode(Node):
             "pos_y":          0.0,
             "pos_z":          0.0,
             "completed_jobs": 0,
+            "tool_force":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
+            "force_z":        0.0,
         })
 
         # ── Publisher: 웹 명령 → 로봇 ──────────────────────
-        self._pub_cmd    = self.create_publisher(String, '/robot/command', 10)
-        self._pub_design = self.create_publisher(Int32,  '/robot/design',  10)
-        self._pub_design_ab = self.create_publisher(String,  '/robot/design_ab',  10)
-        self._pub_completed     = self.create_publisher(Int32,  '/robot/completed_jobs', 10)
-        self._pub_step          = self.create_publisher(Int32,  '/robot/step',           10)
+        self._pub_cmd       = self.create_publisher(String, '/robot/command',        10)
+        self._pub_design    = self.create_publisher(Int32,  '/robot/design',         10)
+        self._pub_design_ab = self.create_publisher(String, '/robot/design_ab',      10)
+        self._pub_completed = self.create_publisher(Int32,  '/robot/completed_jobs', 10)
+        self._pub_step      = self.create_publisher(Int32,  '/robot/step',           10)
 
         # ── Subscriber: 로봇 상태 → Firebase ──────────────
-        # /robot/design 은 여기서 subscribe 안 함 (bridge가 publish 전용)
-        self.create_subscription(Int32,             "/robot/step",                  self._cb_step,                 10)
-        self.create_subscription(String,            "/robot/state",                 self._cb_state,                10)
-        self.create_subscription(Float32MultiArray, "/robot/tcp",                   self._cb_tcp,                  10)
+        self.create_subscription(Int32,             "/robot/step",                  self._cb_step,                  10)
+        self.create_subscription(String,            "/robot/state",                 self._cb_state,                 10)
+        self.create_subscription(Float32MultiArray, "/robot/tcp",                   self._cb_tcp,                   10)
         self.create_subscription(Int32,             "/robot/completed_jobs",         self._cb_completed_jobs,        10)
         self.create_subscription(Int32,             "/robot/speed",                  self._cb_speed,                 10)
         self.create_subscription(Int32,             "/robot/collision_sensitivity",   self._cb_collision_sensitivity, 10)
-        self.create_subscription(JointState,        "/dsr01/joint_states",            self._cb_joint_states,          10)
+        self.create_subscription(JointState,        "/dsr01/joint_states",           self._cb_joint_states,          10)
 
         self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, "
-                               "/robot/completed_jobs, /robot/speed, /robot/collision_sensitivity")
-        self.get_logger().info("Publishing: /robot/command, /robot/design,/robot/design_ab")
+                               "/robot/completed_jobs, /robot/speed, /robot/collision_sensitivity, "
+                               "/dsr01/joint_states")
+        self.get_logger().info("Publishing: /robot/command, /robot/design, /robot/design_ab")
 
-        # TCP throttle
-        self._last_tcp_update = 0.0
+        # ── 서비스 클라이언트: tool_force ──────────────────
+        self._tool_force_client = self.create_client(GetToolForce, '/dsr01/aux_control/get_tool_force')
+        self.create_timer(0.3, self._timer_get_tool_force)  # 0.3초마다 호출
+        self.get_logger().info("Service client: /dsr01/aux_control/get_tool_force")
 
-        # joint_states throttle (0.5초)
+        # throttle 타임스탬프
+        self._last_tcp_update   = 0.0
         self._last_joint_update = 0.0
 
-        # 시작 시 현재 Firebase 값으로 _last_command 초기화 (묵은 명령 무시)
-        
+        # 묵은 명령 무시
         self._last_command = "idle"
         self.get_logger().info(f"Firebase 현재 명령 상태: '{self._last_command}' (무시하고 시작)")
-
-        # Firebase를 idle로 리셋해서 새 명령만 받도록
         self.cmd_ref.update({"action": "idle"})
 
         self._cmd_thread = threading.Thread(target=self._watch_firebase_command, daemon=True)
         self._cmd_thread.start()
 
+    # ── tool_force 서비스 콜 타이머 ───────────────────────
+    def _timer_get_tool_force(self):
+        if not self._tool_force_client.service_is_ready():
+            return
+        req = GetToolForce.Request()
+        req.ref = 0
+        future = self._tool_force_client.call_async(req)
+        future.add_done_callback(self._cb_tool_force_response)
+
+    def _cb_tool_force_response(self, future):
+        try:
+            res = future.result()
+            if res.success:
+                forces_dict = {
+                    str(i): 0.0 if math.isnan(v) else float(round(v, 2))
+                    for i, v in enumerate(res.tool_force)
+                }
+                force_z = forces_dict.get("2", 0.0)
+                self.ref.update({
+                    "tool_force": forces_dict,
+                    "force_z":    force_z,
+                })
+        except Exception as e:
+            self.get_logger().error(f"[FORCE] error: {e}")
+
     # ── Firebase 명령 감지 루프 ────────────────────────────
     def _watch_firebase_command(self):
-        """Firebase robot_command 변화 감지 → /robot/command, /robot/design publish"""
         self.get_logger().info("Firebase command watcher started...")
         while rclpy.ok():
             try:
-                cmd = self.cmd_ref.get()  # { action, design, timestamp }
+                cmd = self.cmd_ref.get()
                 if isinstance(cmd, dict):
                     action = cmd.get("action", "idle")
                     design = cmd.get("design", None)
@@ -114,7 +145,6 @@ class FirebaseBridgeNode(Node):
                 if action and action != self._last_command:
                     self._last_command = action
                     if action in ("start", "stop", "reset", "resume"):
-                        # /robot/command publish
                         msg = String()
                         msg.data = action
                         self._pub_cmd.publish(msg)
@@ -122,7 +152,6 @@ class FirebaseBridgeNode(Node):
 
                         if action == "start":
                             is_resume = cmd.get("is_resume", False) if isinstance(cmd, dict) else False
-
                             if is_resume:
                                 completed_jobs = int(cmd.get("completed_jobs", 0))
                                 current_step   = int(cmd.get("current_step",   0))
@@ -137,56 +166,40 @@ class FirebaseBridgeNode(Node):
                                 self._pub_step.publish(st_msg)
                                 self.get_logger().info(f"[RESUME] current_step={current_step} → /robot/step publish")
 
-                        # start 명령이면:
                         if action == "start" and design is not None:
                             design_int = int(design)
 
-                            # 1) /robot/design publish (항상 숫자 그대로)
                             d_msg = Int32()
                             d_msg.data = design_int
                             self._pub_design.publish(d_msg)
-                            self.get_logger().info(
-                                f"[DESIGN] design={design_int} -> /robot/design publish"
-                            )
+                            self.get_logger().info(f"[DESIGN] design={design_int} -> /robot/design publish")
                             self.ref.update({"design": design_int})
 
-                            # 2) /robot/design_ab publish (design=1 지그재그 전용)
-                            # B 흰 A 검
                             if design_int == 1:
-                                ZIGZAG_PATTERN = "B,A,B,A,B,A,B,A,B" # 흰검흰검흰검흰검흰 (흰5검4)
+                                ZIGZAG_PATTERN = "B,A,B,A,B,A,B,A,B"
                                 ab_msg = String()
                                 ab_msg.data = ZIGZAG_PATTERN
                                 self._pub_design_ab.publish(ab_msg)
-                                self.get_logger().info(
-                                    f"[DESIGN_AB] design=1 -> /robot/design_ab publish: '{ZIGZAG_PATTERN}'"
-                                )
+                                self.get_logger().info(f"[DESIGN_AB] design=1 -> /robot/design_ab publish: '{ZIGZAG_PATTERN}'")
                                 self.ref.update({"design_ab": ZIGZAG_PATTERN})
                             elif design_int == 2:
-                                STRAIGHT_PATTERN = "B,B,B,A,A,A,B,B,B" # 흰흰흰검검검흰흰흰 (흰6검3)
+                                STRAIGHT_PATTERN = "B,B,B,A,A,A,B,B,B"
                                 ab_msg = String()
                                 ab_msg.data = STRAIGHT_PATTERN
                                 self._pub_design_ab.publish(ab_msg)
-                                self.get_logger().info(
-                                    f"[DESIGN_AB] design=2 -> /robot/design_ab publish: '{STRAIGHT_PATTERN}'"
-                                )
+                                self.get_logger().info(f"[DESIGN_AB] design=2 -> /robot/design_ab publish: '{STRAIGHT_PATTERN}'")
                                 self.ref.update({"design_ab": STRAIGHT_PATTERN})
                             else:
-                                # 웹에서 직접 입력한 커스텀 패턴 사용
                                 custom_pattern = cmd.get("custom_pattern", None)
                                 if custom_pattern:
                                     ab_msg = String()
                                     ab_msg.data = custom_pattern
                                     self._pub_design_ab.publish(ab_msg)
-                                    self.get_logger().info(
-                                        f"[DESIGN_AB] design=3 (custom) -> /robot/design_ab publish: '{custom_pattern}'"
-                                    )
+                                    self.get_logger().info(f"[DESIGN_AB] design=3 (custom) -> /robot/design_ab publish: '{custom_pattern}'")
                                     self.ref.update({"design_ab": custom_pattern})
                                 else:
-                                    self.get_logger().warn(
-                                        "[DESIGN_AB] design=3 but no custom_pattern in Firebase! /robot/design_ab NOT published."
-                                    )
+                                    self.get_logger().warn("[DESIGN_AB] design=3 but no custom_pattern in Firebase!")
 
-                        # reset이면 Firebase robot_status 전체 초기화
                         if action == "reset":
                             self.ref.set({
                                 "current_step":   0,
@@ -199,6 +212,8 @@ class FirebaseBridgeNode(Node):
                                 "speed":          0,
                                 "design":         0,
                                 "design_ab":      "",
+                                "tool_force":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
+                                "force_z":        0.0,
                             })
                             self.get_logger().info("[RESET] Firebase robot_status 전체 초기화 완료")
 
@@ -234,7 +249,7 @@ class FirebaseBridgeNode(Node):
         self._last_joint_update = now
         vel = msg.velocity
         if vel:
-            joint_speed = round(math.sqrt(sum(v**2 for v in vel)), 4)
+            joint_speed = float(round(math.sqrt(sum(v**2 for v in vel)), 4))
             self.ref.update({"joint_speed": joint_speed})
 
     def _cb_tcp(self, msg: Float32MultiArray):

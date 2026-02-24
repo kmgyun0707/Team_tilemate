@@ -141,8 +141,14 @@
         <div id="timer-container">타일링 시간: <span id="timer">00 : 00 : 00</span></div>
         <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">9</span></div>
         <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0.0</span>%</div>
-        <div class="info-item">충돌민감도: <span id="collision-sens">0</span></div>
+        <div class="info-item">툴 외력 Fz: <span id="force-z">0.00</span> N</div>
         <div class="info-item" style="text-align: right;">상태: <span id="robot-state">대기</span></div>
+        <div class="info-item" colspan="2" style="grid-column: span 2;">
+            <div style="margin-top: 4px;">
+                <span style="font-size:0.95em; color:#555;">관절 외부토크 (Nm): </span>
+                <span id="ext-torque-display" style="color:#1a237e; font-size:0.95em;">J1: 0.00 &nbsp; J2: 0.00 &nbsp; J3: 0.00 &nbsp; J4: 0.00 &nbsp; J5: 0.00 &nbsp; J6: 0.00</span>
+            </div>
+        </div>
     </div>
 
     <div class="control-panel">
@@ -476,9 +482,19 @@
         const speedPercent = Math.min(100, (rawJointSpeed / MAX_JOINT_SPEED * 100)).toFixed(1);
         document.getElementById('robot-speed').innerText     = speedPercent;
 
-        document.getElementById('robot-state').innerText     = data.state || "대기";
-        document.getElementById('collision-sens').innerText  = data.collision_sensitivity || 0;
-        document.getElementById('job-count').innerText       = data.completed_jobs || 0;
+        document.getElementById('robot-state').innerText = data.state || "대기";
+        document.getElementById('job-count').innerText  = data.completed_jobs || 0;
+
+        // 툴 외력 Fz
+        const forceZ = data.force_z !== undefined ? parseFloat(data.force_z).toFixed(2) : '0.00';
+        document.getElementById('force-z').innerText = forceZ;
+
+        // 관절 외부토크
+        if (data.ext_torque) {
+            const t = data.ext_torque;
+            document.getElementById('ext-torque-display').innerHTML =
+                `J1: ${(t['0']||0).toFixed(2)} &nbsp; J2: ${(t['1']||0).toFixed(2)} &nbsp; J3: ${(t['2']||0).toFixed(2)} &nbsp; J4: ${(t['3']||0).toFixed(2)} &nbsp; J5: ${(t['4']||0).toFixed(2)} &nbsp; J6: ${(t['5']||0).toFixed(2)}`;
+        }
 
         updateProcessStep(data.current_step || 0);
 

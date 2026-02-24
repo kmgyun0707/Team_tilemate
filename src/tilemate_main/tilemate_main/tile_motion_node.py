@@ -70,12 +70,12 @@ class _GripperClient:
     def grab(self):
         self._node.get_logger().info("[GRIPPER] grab")
         self.set_width(CLOSE_W)
-        self._sleep_interruptible(1.0)
+        time.sleep(1.0)
 
     def release(self):
         self._node.get_logger().info("[GRIPPER] release")
         self.set_width(OPEN_W)
-        self._sleep_interruptible(1.0)
+        time.sleep(1.0)
 
 
 class TileMotionNode(Node):
@@ -118,6 +118,7 @@ class TileMotionNode(Node):
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
         self.pub_step   = self.create_publisher(Int32,  "/tile/step", 10)
         self.pub_state  = self.create_publisher(String, "/robot/state", 10)
+        self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10) # 타일 각각 작업 완료시 퍼블리셔
 
         # subs
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
@@ -752,6 +753,11 @@ class TileMotionNode(Node):
             if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC): return False
 
             self.get_logger().info(f"🎉 {tile_i}번 타일 완료")
+            m = Int32()
+            m.data = int(tile_i)  # 또는 누적 완료 개수면 idx+1
+            self.pub_completed_jobs.publish(m)
+            self.get_logger().info(f"[TILE] publish /robot/completed_jobs={m.data}")
+            
 
             # 다음 타일로 넘어가기 전에 checkpoint advance
             # (다음 resume는 tile_i+1의 PICK부터 시작)

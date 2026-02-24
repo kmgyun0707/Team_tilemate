@@ -313,7 +313,7 @@ class ScraperMotionNode(Node):
 
         self._worker = threading.Thread(target=_run_worker, daemon=True)
         self._worker.start()
-
+        
     # -----------------
     # DSR motions (runs in worker thread)
     # -----------------
@@ -440,7 +440,7 @@ class ScraperMotionNode(Node):
             if self._stop_soft:
                 return False
 
-            # ✅ 핵심: 시작 전에 잔류 상태 완전 제거
+            # 시작 전에 잔류 제거 (여긴 OK)
             try:
                 release_force()
             except Exception:
@@ -453,57 +453,45 @@ class ScraperMotionNode(Node):
 
             self.get_logger().info(f"[COMPLIANT] start (thr={threshold_n}N, timeout={timeout_s}s)")
 
-            # 기준 좌표계를 BASE로 고정 (tool 자세 바뀌어도 Z가 안정적)
             set_ref_coord(DR_BASE)
-
-            # 순응(Compliance) 활성화
             task_compliance_ctrl(stx=[3000, 3000, 50, 200, 200, 200], time=0.0)
             wait(0.3)
 
-            # ✅ 아래로 “눌러서” 접촉 유도
-            # - 여기서 fd의 Z를 (+)로 줄지 (-)로 줄지는 시스템 정의에 따라 다를 수 있는데,
-            #   너가 올려준 working code는 (+)로 줬으니 동일하게 간다.
-            #   만약 이게 위로 뜨면, 아래 주석대로 부호를 반대로 바꾸면 됨.
             set_desired_force(
-                fd=[0, 0, float(-(threshold_n+15)), 0, 0, 0], 
+                fd=[0, 0, float(-(threshold_n+15)), 0, 0, 0],
                 dir=[0, 0, 1, 0, 0, 0],
                 mod=DR_FC_MOD_REL
             )
 
             t0 = time.time()
-            try:
-                while True:
-                    self._wait_if_paused()
-                    if self._stop_soft:
-                        return False
+            while True:
+                self._wait_if_paused()
+                if self._stop_soft:
+                    # stop이면 정리하고 나감
+                    try: release_force()
+                    except Exception: pass
+                    try: release_compliance_ctrl()
+                    except Exception: pass
+                    wait(0.2)
+                    return False
 
-                    if timeout_s is not None and (time.time() - t0) > float(timeout_s):
-                        self.get_logger().warn("[COMPLIANT] timeout -> fail")
-                        return False
+                if timeout_s is not None and (time.time() - t0) > float(timeout_s):
+                    self.get_logger().warn("[COMPLIANT] timeout -> fail")
+                    # 실패면 정리하고 나감
+                    try: release_force()
+                    except Exception: pass
+                    try: release_compliance_ctrl()
+                    except Exception: pass
+                    wait(0.2)
+                    return False
 
-                    # 조건 만족 시 -1 (Doosan API 관례)
-                    ret = check_force_condition(DR_AXIS_Z, min=0, max=float(threshold_n))
-                    if ret == -1:
-                        self.get_logger().info(f"[COMPLIANT] reached threshold={threshold_n}N")
-                        return True
+                ret = check_force_condition(DR_AXIS_Z, min=0, max=float(threshold_n))
+                if ret == -1:
+                    self.get_logger().info(f"[COMPLIANT] reached threshold={threshold_n}N")
+                    # ✅ 성공 시에는 release하지 않고 그대로 반환 (COAT 동안 유지)
+                    return True
 
-                    wait(0.1)
-
-            finally:
-                try:
-                    release_force()
-                except Exception:
-                    pass
-                try:
-                    release_compliance_ctrl()
-                except Exception:
-                    pass
-                try:
-                    set_ref_coord(DR_BASE)
-                except Exception:
-                    pass
-                wait(0.2)
-
+                wait(0.1)
         def do_stroke() -> bool:
             # 한 번 stroke 시퀀스 (툴 기준 상대 회전 포함)
             if self._check_abort():

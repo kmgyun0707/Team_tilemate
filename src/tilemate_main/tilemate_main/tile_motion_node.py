@@ -226,6 +226,78 @@ class TileMotionNode(Node):
         self.get_logger().warn("[TILE] resume requested (/tile/resume)")
         self._resume_requested = True
 
+
+    def return_tool(self) -> bool:
+        """
+        ✅ 작업 완료 시 흡착 툴을 거치대에 반납.
+        - stop_soft / pause 고려: 각 구간마다 _check_abort(), _wait_if_paused()로 중단/일시정지 대응
+        - 실제 즉시정지는 interrupt_node(MoveStop)가 담당 (여긴 "다음 모션 발행 차단"만 보장)
+        - 성공 True / 중단 또는 실패 False
+        """
+        from DSR_ROBOT2 import movel, wait, posx, DR_BASE
+
+        self.get_logger().info("[TILE] 작업 완료. 흡착 툴을 거치대에 반납합니다...")
+
+        # 0) 중단/일시정지 즉시 반영
+        if self._check_abort():
+            self.get_logger().warn("[TILE][RETURN_TOOL] aborted before start")
+            return False
+
+        try:
+            # 1) 안전 구역(Waypoint)으로 먼저 이동
+            self._wait_if_paused()
+            if self._check_abort():
+                return False
+            movel(posx(list(TOOL_WAYPOINT)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
+            if not self._sleep_interruptible(0.2):
+                return False
+
+            # 2) 툴 거치대 상부로 이동
+            self._wait_if_paused()
+            if self._check_abort():
+                return False
+            movel(posx(list(TOOL_GRIP_ABOVE)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
+            if not self._sleep_interruptible(0.2):
+                return False
+
+            # 3) 툴 거치대 위치로 하강
+            self._wait_if_paused()
+            if self._check_abort():
+                return False
+            movel(posx(list(TOOL_GRIP_DOWN)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
+            wait(0.5)
+            if not self._sleep_interruptible(0.1):
+                return False
+
+            # 4) 그리퍼를 열어서 툴 놓기
+            self._wait_if_paused()
+            if self._check_abort():
+                return False
+            self.gripper.release()
+            if self._check_abort():
+                return False
+
+            # 5) 툴과 부딪히지 않게 다시 상단으로 상승
+            self._wait_if_paused()
+            if self._check_abort():
+                return False
+            movel(posx(list(TOOL_GRIP_ABOVE)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
+            if not self._sleep_interruptible(0.2):
+                return False
+
+            self.get_logger().info("✅ [TILE] 흡착 툴 반납 완료!")
+            return True
+
+        except Exception as e:
+            # stop_soft 중이면 "stopped"로 취급 (상위 worker가 stopped로 마무리하게)
+            if self._stop_soft:
+                self.get_logger().warn(f"[TILE][RETURN_TOOL] exception during stop -> treat as stopped: {e}")
+                return False
+            self.get_logger().error(f"[TILE][RETURN_TOOL] failed: {e}")
+            return False
+
+
+
     # -----------------
     # tick (worker orchestration)
     # -----------------
@@ -687,6 +759,12 @@ class TileMotionNode(Node):
                 self._set_ckpt("PICK", tile_i + 1)
 
         # all done
+        # ✅ 완료 후 툴 반납 (stop_soft / pause 고려)
+        self._set_ckpt("TOOL_RETURN_WAYPOINT", 0)
+        if not self.return_tool():
+            self._worker_err = "stopped" if self._stop_soft else "return_tool_failed"
+            return False
+
         self._set_ckpt("DONE", 0)
         return True
 

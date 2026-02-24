@@ -141,12 +141,12 @@
         <div id="timer-container">타일링 시간: <span id="timer">00 : 00 : 00</span></div>
         <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">9</span></div>
         <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0.0</span>%</div>
-        <div class="info-item">툴 외력 Fz: <span id="force-z">0.00</span> N</div>
+        <div class="info-item">툴 외력 Fz: <span id="force-z">0.00</span> N &nbsp;|&nbsp; 합력: <span id="force-total">0.00</span> N</div>
         <div class="info-item" style="text-align: right;">상태: <span id="robot-state">대기</span></div>
         <div class="info-item" colspan="2" style="grid-column: span 2;">
             <div style="margin-top: 4px;">
-                <span style="font-size:0.95em; color:#555;">관절 외부토크 (Nm): </span>
-                <span id="ext-torque-display" style="color:#1a237e; font-size:0.95em;">J1: 0.00 &nbsp; J2: 0.00 &nbsp; J3: 0.00 &nbsp; J4: 0.00 &nbsp; J5: 0.00 &nbsp; J6: 0.00</span>
+                <span style="font-size:0.95em; color:#333;">관절 외부토크 (Nm): </span>
+                <span id="ext-torque-display" style="color:#d32f2f; font-size:0.95em;">J1: 0.00 &nbsp; J2: 0.00 &nbsp; J3: 0.00 &nbsp; J4: 0.00 &nbsp; J5: 0.00 &nbsp; J6: 0.00</span>
             </div>
         </div>
     </div>
@@ -194,7 +194,26 @@
                 box-shadow: 0 4px 20px rgba(198,40,40,0.5);
                 animation: blink-estop 1s step-start infinite;
             ">⛔ 비상정지</div>
-            <button onclick="resumeRobot()" style="
+            <div id="collision-info" style="
+                display: none;
+                background: #fff3e0;
+                color: #bf360c;
+                font-size: 1em;
+                font-weight: bold;
+                padding: 8px 24px;
+                border-radius: 8px;
+                border: 2px solid #ff6d00;
+            "></div>
+            <div id="collision-reset-guide" style="
+                display: none;
+                color: #ffffff;
+                font-size: 1em;
+                font-weight: bold;
+                background: rgba(0,0,0,0.4);
+                padding: 8px 20px;
+                border-radius: 8px;
+            ">충돌 원인 제거 후 아래 초기화 버튼을 눌러주세요</div>
+            <button id="resume-btn" onclick="resumeRobot()" style="
                 pointer-events: all;
                 padding: 14px 44px;
                 font-size: 1.3em;
@@ -485,15 +504,41 @@
         document.getElementById('robot-state').innerText = data.state || "대기";
         document.getElementById('job-count').innerText  = data.completed_jobs || 0;
 
-        // 툴 외력 Fz
+        // 툴 외력 Fz + 합력
         const forceZ = data.force_z !== undefined ? parseFloat(data.force_z).toFixed(2) : '0.00';
-        document.getElementById('force-z').innerText = forceZ;
+        const forceTotal = data.force_total !== undefined ? parseFloat(data.force_total).toFixed(2) : '0.00';
+        document.getElementById('force-z').innerText     = forceZ;
+        document.getElementById('force-total').innerText = forceTotal;
 
         // 관절 외부토크
         if (data.ext_torque) {
             const t = data.ext_torque;
             document.getElementById('ext-torque-display').innerHTML =
                 `J1: ${(t['0']||0).toFixed(2)} &nbsp; J2: ${(t['1']||0).toFixed(2)} &nbsp; J3: ${(t['2']||0).toFixed(2)} &nbsp; J4: ${(t['3']||0).toFixed(2)} &nbsp; J5: ${(t['4']||0).toFixed(2)} &nbsp; J6: ${(t['5']||0).toFixed(2)}`;
+        }
+
+        // 충돌 감지 → 자동 비상정지 오버레이 (재개 불가, 초기화만 가능)
+        if (data.state && data.state.includes('충돌 감지')) {
+            const overlay = document.getElementById('estop-overlay');
+            if (overlay.style.display !== 'flex') {
+                overlay.style.display = 'flex';
+                pauseTimer();
+            }
+            const resumeBtn = document.getElementById('resume-btn');
+            if (resumeBtn) resumeBtn.style.display = 'none';
+            const info = document.getElementById('collision-info');
+            if (data.collision_joint !== undefined && data.collision_torque !== undefined) {
+                info.style.display = 'block';
+                if (data.collision_joint === 0) {
+                    info.innerText = `⚠ TCP 합력 ${parseFloat(data.collision_torque).toFixed(2)} N 초과`;
+                } else if (data.collision_joint === -1) {
+                    info.innerText = `⚠ TCP Fz ${parseFloat(data.collision_torque).toFixed(2)} N 초과`;
+                } else {
+                    info.innerText = `⚠ J${data.collision_joint} 관절 외부토크 ${parseFloat(data.collision_torque).toFixed(2)} Nm 초과`;
+                }
+            }
+            const resetGuide = document.getElementById('collision-reset-guide');
+            if (resetGuide) resetGuide.style.display = 'block';
         }
 
         updateProcessStep(data.current_step || 0);
@@ -550,7 +595,7 @@
     // -------------------------------------------------------
     // 디자인 선택 팝업
     // -------------------------------------------------------
-    // 3x3 패턴 정의 (R=빨강, B=검정, W=흰색)
+    // 3x3 패턴 정의 (B=검정, W=흰색)
     const PATTERNS = {
         1: ['W','B','W', 'B','W','B', 'W','B','W'],   // WBWB 체커보드
         2: ['W','W','W', 'B','B','B', 'W','W','W'],   // W줄/B줄/W줄
@@ -740,9 +785,10 @@
 
     function resumeRobot() {
         database.ref('robot_command').set({ action: 'resume', timestamp: Date.now() });
-        // 오버레이 숨기기
         document.getElementById('estop-overlay').style.display = 'none';
-        // 타이머 재개
+        const info = document.getElementById('collision-info');
+        info.style.display = 'none';
+        info.innerText = '';
         startTimer();
     }
     window.resumeRobot = resumeRobot;
@@ -790,6 +836,13 @@
 
         // 비상정지 오버레이 초기화
         document.getElementById('estop-overlay').style.display = 'none';
+        // 충돌 관련 요소 초기화
+        const resumeBtn = document.getElementById('resume-btn');
+        if (resumeBtn) resumeBtn.style.display = '';
+        const collisionInfo = document.getElementById('collision-info');
+        if (collisionInfo) { collisionInfo.style.display = 'none'; collisionInfo.innerText = ''; }
+        const collisionGuide = document.getElementById('collision-reset-guide');
+        if (collisionGuide) collisionGuide.style.display = 'none';
 
         // 3. 2D 타일 UI 초기화
         for (let i = 1; i <= TOTAL_TILES; i++) {

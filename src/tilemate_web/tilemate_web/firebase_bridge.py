@@ -96,6 +96,12 @@ class FirebaseBridgeNode(Node):
         self.create_timer(0.3, self._timer_get_ext_torque)
         self.get_logger().info("Service clients: get_tool_force, get_external_torque")
 
+        # ── 충돌 감지 설정 ────────────────────────────────
+        self.COLLISION_THRESHOLD = 30.0   # 관절 외부토크 임계값 (Nm)
+        self.FORCE_THRESHOLD     = 20.0   # TCP 합력 임계값 (N)
+        self.FORCE_Z_THRESHOLD   = 15.0   # TCP Fz 임계값 (N)
+        self._collision_detected = False  # 중복 stop 방지
+
         # throttle 타임스탬프
         self._last_tcp_update   = 0.0
         self._last_joint_update = 0.0
@@ -126,10 +132,54 @@ class FirebaseBridgeNode(Node):
                     for i, v in enumerate(res.tool_force)
                 }
                 force_z = forces_dict.get("2", 0.0)
+
+                # TCP 합력 계산 (Fx² + Fy² + Fz² 의 루트, 선형력 3축만)
+                fx = forces_dict.get("0", 0.0)
+                fy = forces_dict.get("1", 0.0)
+                fz = forces_dict.get("2", 0.0)
+                force_total = float(round(math.sqrt(fx**2 + fy**2 + fz**2), 2))
+
                 self.ref.update({
-                    "tool_force": forces_dict,
-                    "force_z":    force_z,
+                    "tool_force":  forces_dict,
+                    "force_z":     force_z,
+                    "force_total": force_total,
                 })
+
+                # ── TCP 합력 임계값 초과 시 자동 비상정지 ──
+                if not self._collision_detected and force_total > self.FORCE_THRESHOLD:
+                    self._collision_detected = True
+                    self.get_logger().warn(
+                        f"[FORCE DETECTED] TCP 합력={force_total} N "
+                        f"(threshold={self.FORCE_THRESHOLD}) → 자동 비상정지!"
+                    )
+                    self.cmd_ref.update({"action": "stop", "timestamp": int(time.time() * 1000)})
+                    self.ref.update({
+                        "state":            "충돌 감지 - 비상정지",
+                        "collision_joint":  0,
+                        "collision_torque": force_total,
+                    })
+                    msg = String()
+                    msg.data = "stop"
+                    self._pub_cmd.publish(msg)
+                    self._last_command = "stop"
+
+                # ── TCP Fz 임계값 초과 시 자동 비상정지 ──
+                elif not self._collision_detected and abs(fz) > self.FORCE_Z_THRESHOLD:
+                    self._collision_detected = True
+                    self.get_logger().warn(
+                        f"[FORCE_Z DETECTED] TCP Fz={fz} N "
+                        f"(threshold={self.FORCE_Z_THRESHOLD}) → 자동 비상정지!"
+                    )
+                    self.cmd_ref.update({"action": "stop", "timestamp": int(time.time() * 1000)})
+                    self.ref.update({
+                        "state":            "충돌 감지 - 비상정지",
+                        "collision_joint":  -1,   # -1 = Fz 감지
+                        "collision_torque": fz,
+                    })
+                    msg = String()
+                    msg.data = "stop"
+                    self._pub_cmd.publish(msg)
+                    self._last_command = "stop"
         except Exception as e:
             self.get_logger().error(f"[FORCE] error: {e}")
 
@@ -150,6 +200,31 @@ class FirebaseBridgeNode(Node):
                     for i, v in enumerate(res.ext_torque)
                 }
                 self.ref.update({"ext_torque": torque_dict})
+
+                # ── 충돌 감지: 어느 관절이든 임계값 초과 시 자동 비상정지 ──
+                if not self._collision_detected:
+                    for i, v in torque_dict.items():
+                        if abs(v) > self.COLLISION_THRESHOLD:
+                            self._collision_detected = True
+                            self.get_logger().warn(
+                                f"[COLLISION DETECTED] J{int(i)+1} ext_torque={v} Nm "
+                                f"(threshold={self.COLLISION_THRESHOLD}) → 자동 비상정지!"
+                            )
+                            # Firebase에 stop 명령 + 충돌 정보 기록
+                            self.cmd_ref.update({"action": "stop", "timestamp": int(time.time() * 1000)})
+                            self.ref.update({
+                                "state":              "충돌 감지 - 비상정지",
+                                "collision_joint":    int(i) + 1,
+                                "collision_torque":   v,
+                            })
+                            # /robot/command 토픽에도 즉시 publish
+                            msg = String()
+                            msg.data = "stop"
+                            self._pub_cmd.publish(msg)
+                            self._last_command = "stop"
+                            break
+
+                # reset 명령이 오면 충돌 감지 플래그 해제 (watch_firebase_command에서 처리)
         except Exception as e:
             self.get_logger().error(f"[EXT_TORQUE] error: {e}")
 
@@ -225,6 +300,7 @@ class FirebaseBridgeNode(Node):
                                     self.get_logger().warn("[DESIGN_AB] design=3 but no custom_pattern in Firebase!")
 
                         if action == "reset":
+                            self._collision_detected = False  # 충돌 감지 플래그 해제
                             self.ref.set({
                                 "current_step":   0,
                                 "state":          "대기",

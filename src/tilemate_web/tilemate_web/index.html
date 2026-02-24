@@ -140,7 +140,7 @@
     <div class="info-grid">
         <div id="timer-container">타일링 시간: <span id="timer">00 : 00 : 00</span></div>
         <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">9</span></div>
-        <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0</span>%</div>
+        <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0.0</span>%</div>
         <div class="info-item">충돌민감도: <span id="collision-sens">0</span></div>
         <div class="info-item" style="text-align: right;">상태: <span id="robot-state">대기</span></div>
     </div>
@@ -465,7 +465,17 @@
         const data = snapshot.val();
         if (!data) return;
 
-        document.getElementById('robot-speed').innerText     = data.speed || 0;
+        // -------------------------------------------------------
+        // 로봇속도 표시 (관절속도 합력 기반)
+        // Firebase의 joint_speed: √(v1²+v2²+...+v6²) (단위: rad/s)
+        // M0609 최대 관절속도 ≈ 3.14 rad/s (180°/s), 6축 합력 최대치를 7.0으로 설정
+        // 0~100% 로 정규화해서 표시 (실제 동작 중 최대값에 따라 MAX_JOINT_SPEED 조정 가능)
+        // -------------------------------------------------------
+        const MAX_JOINT_SPEED = 7.0;
+        const rawJointSpeed = data.joint_speed || 0;
+        const speedPercent = Math.min(100, (rawJointSpeed / MAX_JOINT_SPEED * 100)).toFixed(1);
+        document.getElementById('robot-speed').innerText     = speedPercent;
+
         document.getElementById('robot-state').innerText     = data.state || "대기";
         document.getElementById('collision-sens').innerText  = data.collision_sensitivity || 0;
         document.getElementById('job-count').innerText       = data.completed_jobs || 0;

@@ -16,9 +16,11 @@
 #   /robot/design    (std_msgs/Int32)   1 | 2 | 3  ← 웹에서 선택한 디자인 번호
 
 import threading
+import math
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32, String, Float32MultiArray
+from sensor_msgs.msg import JointState
 
 import firebase_admin
 from firebase_admin import credentials, db
@@ -72,6 +74,7 @@ class FirebaseBridgeNode(Node):
         self.create_subscription(Int32,             "/robot/completed_jobs",         self._cb_completed_jobs,        10)
         self.create_subscription(Int32,             "/robot/speed",                  self._cb_speed,                 10)
         self.create_subscription(Int32,             "/robot/collision_sensitivity",   self._cb_collision_sensitivity, 10)
+        self.create_subscription(JointState,        "/dsr01/joint_states",            self._cb_joint_states,          10)
 
         self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, "
                                "/robot/completed_jobs, /robot/speed, /robot/collision_sensitivity")
@@ -79,6 +82,9 @@ class FirebaseBridgeNode(Node):
 
         # TCP throttle
         self._last_tcp_update = 0.0
+
+        # joint_states throttle (0.5초)
+        self._last_joint_update = 0.0
 
         # 시작 시 현재 Firebase 값으로 _last_command 초기화 (묵은 명령 무시)
         
@@ -220,6 +226,16 @@ class FirebaseBridgeNode(Node):
     def _cb_collision_sensitivity(self, msg: Int32):
         self.ref.update({"collision_sensitivity": msg.data})
         self.get_logger().info(f"[COLLISION] → Firebase: {msg.data}")
+
+    def _cb_joint_states(self, msg: JointState):
+        now = time.time()
+        if now - self._last_joint_update < 0.5:  # 0.5초 throttle
+            return
+        self._last_joint_update = now
+        vel = msg.velocity
+        if vel:
+            joint_speed = round(math.sqrt(sum(v**2 for v in vel)), 4)
+            self.ref.update({"joint_speed": joint_speed})
 
     def _cb_tcp(self, msg: Float32MultiArray):
         now = time.time()

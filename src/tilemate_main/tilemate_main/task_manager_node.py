@@ -45,6 +45,7 @@ class TaskManagerNode(Node):
 
         self.pub_step = self.create_publisher(Int32, "/robot/step", 10)
         self._set_step(self.STEP_READY)
+        self.get_logger().warn("1111111111111111111111")
 
         # subscribers
         self.create_subscription(String, "/robot/command", self._cb_cmd, 10)
@@ -111,11 +112,13 @@ class TaskManagerNode(Node):
         self._phase = "IDLE"
         self._set_step(self.STEP_FINISHED)
 
-    def _finish_abort(self):
+    def _finish_abort(self,reset_step=True):
         """중단/리셋/에러 등 비정상 종료(사용자 중단 포함)"""
         self._busy = False
         self._phase = "IDLE"
-        self._set_step(self.STEP_READY)
+        if reset_step:
+            self.get_logger().warn("dsadddddddddddddddddddddddddd")
+            self._set_step(self.STEP_READY)
 
     # -----------------
     # status parsing
@@ -134,8 +137,8 @@ class TaskManagerNode(Node):
         return state, tok, msg
 
     def _is_active_token(self, tok: int) -> bool:
-        # stop/reset 이후 늦게 들어오는 status 무시용
-        return self._busy and (tok == self._active_token)
+        # busy가 잠깐 False로 내려가도, token이 같으면 유효로 인정
+        return tok == self._active_token
 
     # -----------------
     # callbacks
@@ -161,15 +164,15 @@ class TaskManagerNode(Node):
 
         elif cmd == "stop":
             self.get_logger().warn("[TASK] stop_soft True + abort")
+            self._finish_abort(reset_step=False)
             self._pub_bool(self.pub_pause, False)
             self._pub_bool(self.pub_stop_soft, True)
-            self._finish_abort()
 
         elif cmd == "reset":
             self.get_logger().warn("[TASK] reset -> stop_soft True + abort")
             self._pub_bool(self.pub_pause, False)
             self._pub_bool(self.pub_stop_soft, True)
-            self._finish_abort()
+            self._finish_abort(reset_step=True)
 
         else:
             self.get_logger().warn(f"[TASK] unknown command: {cmd}")
@@ -186,6 +189,7 @@ class TaskManagerNode(Node):
 
         if state == "done":
             self.get_logger().info(f"[TASK] scraper done token={tok} -> start tile")
+            self._phase = "TILE"   # ✅ 강제 정합
             self._start_tile(tok)
 
         elif state == "error":
@@ -241,7 +245,7 @@ class TaskManagerNode(Node):
         -> Task step:
           3,4(그리고 필요하면 5) 반영 (TILE phase일 때만)
         """
-        if self._phase != "TILE":
+        if self._phase != "TILE" or not self._busy:
             return
 
         s = int(msg.data)

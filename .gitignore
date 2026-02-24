@@ -1,6 +1,6 @@
 # Firebase Secrets
 *.json
-src/cobot1/config/*.json
+src/tilemate_web/config/*.json
 
 # ROS2 build artifacts
 build/

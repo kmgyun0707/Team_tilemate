@@ -80,9 +80,9 @@ class _GripperClient:
 
 class TileMotionNode(Node):
     STEP_IDLE   = 0
-    STEP_PICK   = 1
-    STEP_PLACE  = 2
-    STEP_DETACH = 3
+    STEP_PICK   = 3 # 수정금지 ! 타일에서 3 4 -> 태스크 매니저에 3,4로 매핑되어있음 
+    STEP_PLACE  = 4
+    STEP_DETACH = 4
     STEP_DONE   = 5
 
     def __init__(self, cfg: RobotConfig, boot_node: Node):

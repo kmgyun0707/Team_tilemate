@@ -39,7 +39,7 @@ CLOSE_W = 0.019
 # positions
 # ----------------------------
 PICK_ABOVE_A = [344.54+5.0-2.0+8.0-8.0, -100.1-5.0-2.0+5.0, 260.95, 74.35, 178.8, 73.81]
-PICK_ABOVE_B = [436.16+1.0-0.3, -98.84+2.0-0.1, 260.78, 69.2, 178.73, 68.63]
+PICK_ABOVE_B = [436.16+1.0-3.0+5.0-1.0, -98.84+2.0-1.0-5.0, 260.78, 69.2, 178.73, 68.63]
 
 PLACE_TILT_BASE01 = [402.08, 158.83, 229.77, 75.0, 178.60, 77.00]
 PLACE_TILT_BASE02 = [469.39, 157.97, 228.80, 75.0, 178.60, 77.00]
@@ -127,7 +127,7 @@ class TileMotionNode(Node):
         self.create_subscription(Bool,  "/task/stop_soft",self._cb_stop_soft, 10)
         self.create_subscription(String,"/robot/design_ab", self._cb_design_ab, 10)
 
-        self._design_pattern = ["A"] * 9
+        self._design_pattern = ["B"] * 9
         self.gripper = _GripperClient(self)
 
         self._initialize_robot()

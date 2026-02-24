@@ -503,6 +503,7 @@ class TileMotionNode(Node):
                 tilt_angle = -24 if (tile_idx % 3 == 0) else 24
                 tilt_forward = posx([0, 0, 0, 0, tilt_angle, 0])
                 movel(tilt_forward, vel=30, acc=30, ref=DR_TOOL, time=0.5)
+                
                 wait(0.2)
                 return True
             finally:
@@ -569,20 +570,20 @@ class TileMotionNode(Node):
             self.gripper.release()
 
             self._set_ckpt("TOOL_APPROACH_ABOVE", 1)
-            if not safe_movel(TOOL_GRIP_ABOVE, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC): return False
 
             self._set_ckpt("TOOL_APPROACH_DOWN", 1)
-            if not safe_movel(TOOL_GRIP_DOWN,  vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_GRIP_DOWN),  vel=VELOCITY, acc=ACC): return False
 
             self._set_ckpt("TOOL_GRAB", 1)
             self.gripper.grab()
 
             self._set_ckpt("TOOL_LIFT", 1)
-            if not safe_movel(TOOL_GRIP_ABOVE, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC): return False
 
             self._set_tile_status(self.STEP_IDLE, "안전구역(Waypoint) 이동")
             self._set_ckpt("TOOL_WAYPOINT", 1)
-            if not safe_movel(TOOL_WAYPOINT, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_WAYPOINT), vel=VELOCITY, acc=ACC): return False
 
             # 다음 단계 진입 ckpt
             next_tile_i = int(ck.get("tile_i", 1))
@@ -626,7 +627,7 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 준비({color_name}) - {tile_i}번")
-            if not safe_movel(pick_pos, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 하강 - {tile_i}번")
             if not compliant_approach(threshold_n=13.0, timeout_s=5.0):
@@ -634,7 +635,7 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 상승 - {tile_i}번")
-            if not safe_movel(pick_pos, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
 
             if not move_relative(0, 100, 0): return False
 
@@ -645,7 +646,7 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_PLACE, f"타일 배치 상부 - {tile_i}번")
-            if not safe_movel(place_pos, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC): return False
 
             self._set_tile_status(self.STEP_PLACE, f"타일 배치 하강 - {tile_i}번")
             if not compliant_approach(threshold_n=11.0, timeout_s=10.0):
@@ -662,7 +663,7 @@ class TileMotionNode(Node):
             if not detach_tile(tile_i): return False
 
             self._set_tile_status(self.STEP_PLACE, f"타일 배치 상부 복귀 - {tile_i}번")
-            if not safe_movel(place_pos, vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC): return False
 
             self.get_logger().info(f"🎉 {tile_i}번 타일 완료")
 

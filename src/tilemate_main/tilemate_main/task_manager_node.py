@@ -45,7 +45,6 @@ class TaskManagerNode(Node):
 
         self.pub_step = self.create_publisher(Int32, "/robot/step", 10)
         self._set_step(self.STEP_READY)
-        self.get_logger().warn("1111111111111111111111")
 
         # subscribers
         self.create_subscription(String, "/robot/command", self._cb_cmd, 10)
@@ -117,7 +116,6 @@ class TaskManagerNode(Node):
         self._busy = False
         self._phase = "IDLE"
         if reset_step:
-            self.get_logger().warn("dsadddddddddddddddddddddddddd")
             self._set_step(self.STEP_READY)
 
     # -----------------

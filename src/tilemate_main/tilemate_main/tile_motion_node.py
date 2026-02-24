@@ -33,7 +33,7 @@ VELOCITY = 30
 ACC = 30
 
 OPEN_W  = 0.040
-CLOSE_W = 0.005
+CLOSE_W = 0.019
 
 # ----------------------------
 # positions
@@ -70,12 +70,12 @@ class _GripperClient:
     def grab(self):
         self._node.get_logger().info("[GRIPPER] grab")
         self.set_width(CLOSE_W)
-        time.sleep(1.0)
+        self._sleep_interruptible(1.0)
 
     def release(self):
         self._node.get_logger().info("[GRIPPER] release")
         self.set_width(OPEN_W)
-        time.sleep(1.0)
+        self._sleep_interruptible(1.0)
 
 
 class TileMotionNode(Node):
@@ -450,7 +450,7 @@ class TileMotionNode(Node):
             target = posx([cur[0] + dx, cur[1] + dy, cur[2] + dz, cur[3], cur[4], cur[5]])
             if not safe_movel(target, ref=DR_BASE, vel=VELOCITY, acc=ACC):
                 return False
-            return self._sleep_interruptible(0.2)
+            return self._sleep_interruptible(1.0)
 
         def compliant_approach(threshold_n=11.0, timeout_s=10.0) -> bool:
             # ✅ 반드시 timeout/stop 체크가 있는 버전으로 교체 추천
@@ -646,11 +646,11 @@ class TileMotionNode(Node):
             self._set_tile_status(self.STEP_PICK, f"타일 파지 하강 - {tile_i}번")
             if not compliant_approach(threshold_n=13.0, timeout_s=10.0):
                 self._worker_err = "stopped" if self._stop_soft else "pick_compliant_failed"
+                self._sleep_interruptible(0.5)
                 return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 상승 - {tile_i}번")
             if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
-            time.sleep(0.5)
             if not move_relative(0, 100, 0): return False
 
             # ---------------- PLACE ----------------

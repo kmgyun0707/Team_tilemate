@@ -575,8 +575,8 @@
         }
 
         closePopup();
-        // robot_command에 action + design 번호 함께 전송
-        database.ref('robot_command').set({ action: 'start', design: selectedDesign, timestamp: Date.now() });
+        // robot_command에 action + design 번호 함께 전송 (최초 시작)
+        database.ref('robot_command').set({ action: 'start', design: selectedDesign, is_resume: false, timestamp: Date.now() });
         // 기존 start 로직
         isStarted = true;
         if (!timerInterval) startTimer();
@@ -660,6 +660,7 @@
             action: 'start',
             design: 3,
             custom_pattern: patternStr,
+            is_resume: false,
             timestamp: Date.now()
         });
 
@@ -712,16 +713,8 @@
     window.sendCommand = sendCommand;
 
     function resumeRobot() {
-        // Firebase /robot/command 에 start 전송
-        database.ref('robot_status').once('value').then(snapshot => {
-            const data = snapshot.val() || {};
-            database.ref('robot_command').set({
-                action: 'start',
-                completed_jobs: data.completed_jobs || 0,
-                current_step: data.current_step || 0,
-                timestamp: Date.now()
-            });
-        });// 오버레이 숨기기
+        database.ref('robot_command').set({ action: 'resume', timestamp: Date.now() });
+        // 오버레이 숨기기
         document.getElementById('estop-overlay').style.display = 'none';
         // 타이머 재개
         startTimer();

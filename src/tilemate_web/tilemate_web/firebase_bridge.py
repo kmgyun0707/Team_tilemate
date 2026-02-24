@@ -107,7 +107,7 @@ class FirebaseBridgeNode(Node):
 
                 if action and action != self._last_command:
                     self._last_command = action
-                    if action in ("start", "stop", "reset"):
+                    if action in ("start", "stop", "reset", "resume"):
                         # /robot/command publish
                         msg = String()
                         msg.data = action
@@ -115,18 +115,21 @@ class FirebaseBridgeNode(Node):
                         self.get_logger().info(f"[CMD] Firebase '{action}' → /robot/command publish")
 
                         if action == "start":
-                            completed_jobs = int(cmd.get("completed_jobs", 0)) if isinstance(cmd, dict) else 0
-                            current_step   = int(cmd.get("current_step",   0)) if isinstance(cmd, dict) else 0
+                            is_resume = cmd.get("is_resume", False) if isinstance(cmd, dict) else False
 
-                            cj_msg = Int32()
-                            cj_msg.data = completed_jobs
-                            self._pub_completed.publish(cj_msg)
-                            self.get_logger().info(f"[RESUME] completed_jobs={completed_jobs} → /robot/completed_jobs publish")
+                            if is_resume:
+                                completed_jobs = int(cmd.get("completed_jobs", 0))
+                                current_step   = int(cmd.get("current_step",   0))
 
-                            st_msg = Int32()
-                            st_msg.data = current_step
-                            self._pub_step.publish(st_msg)
-                            self.get_logger().info(f"[RESUME] current_step={current_step} → /robot/step publish")
+                                cj_msg = Int32()
+                                cj_msg.data = completed_jobs
+                                self._pub_completed.publish(cj_msg)
+                                self.get_logger().info(f"[RESUME] completed_jobs={completed_jobs} → /robot/completed_jobs publish")
+
+                                st_msg = Int32()
+                                st_msg.data = current_step
+                                self._pub_step.publish(st_msg)
+                                self.get_logger().info(f"[RESUME] current_step={current_step} → /robot/step publish")
 
                         # start 명령이면:
                         if action == "start" and design is not None:

@@ -428,50 +428,81 @@ class ScraperMotionNode(Node):
             return self._sleep_interruptible(0.2)
 
         # ---- contact helper (필요 시 유지) ----
-        def approach_until_contact_world_z(
-            axis=2, threshold=4.0, max_down_mm=15.0, step_mm=0.5, timeout_sec=8.0
-        ) -> bool:
-            import DSR_ROBOT2 as dr
-            if not hasattr(dr, "get_tool_force"):
-                cur, _ = get_current_posx(DR_WORLD)
-                target = [cur[0], cur[1], cur[2] - float(max_down_mm), cur[3], cur[4], cur[5]]
-                safe_movel(posx(target), ref=DR_WORLD, vel=3, acc=3)
+        
+        def compliant_approach_down(threshold_n: float = 6.0, timeout_s: float = 8.0) -> bool:
+            from DSR_ROBOT2 import (
+                set_ref_coord, task_compliance_ctrl, set_desired_force,
+                check_force_condition, release_force, release_compliance_ctrl,
+                DR_BASE, DR_FC_MOD_REL, DR_AXIS_Z, wait
+            )
+
+            self._wait_if_paused()
+            if self._stop_soft:
                 return False
 
+            # ✅ 핵심: 시작 전에 잔류 상태 완전 제거
+            try:
+                release_force()
+            except Exception:
+                pass
+            try:
+                release_compliance_ctrl()
+            except Exception:
+                pass
+            wait(0.2)
+
+            self.get_logger().info(f"[COMPLIANT] start (thr={threshold_n}N, timeout={timeout_s}s)")
+
+            # 기준 좌표계를 BASE로 고정 (tool 자세 바뀌어도 Z가 안정적)
+            set_ref_coord(DR_BASE)
+
+            # 순응(Compliance) 활성화
+            task_compliance_ctrl(stx=[3000, 3000, 50, 200, 200, 200], time=0.0)
+            wait(0.3)
+
+            # ✅ 아래로 “눌러서” 접촉 유도
+            # - 여기서 fd의 Z를 (+)로 줄지 (-)로 줄지는 시스템 정의에 따라 다를 수 있는데,
+            #   너가 올려준 working code는 (+)로 줬으니 동일하게 간다.
+            #   만약 이게 위로 뜨면, 아래 주석대로 부호를 반대로 바꾸면 됨.
+            set_desired_force(
+                fd=[0, 0, float(-(threshold_n+15)), 0, 0, 0], 
+                dir=[0, 0, 1, 0, 0, 0],
+                mod=DR_FC_MOD_REL
+            )
+
             t0 = time.time()
-            moved = 0.0
-            while moved < float(max_down_mm):
-                if self._check_abort():
-                    self._worker_err = "stopped"
-                    return False
-                if (time.time() - t0) > float(timeout_sec):
-                    self.get_logger().warn("[TOUCH] timeout -> no contact detected")
-                    return False
+            try:
+                while True:
+                    self._wait_if_paused()
+                    if self._stop_soft:
+                        return False
 
-                d = min(float(step_mm), float(max_down_mm) - moved)
-                cur, _ = get_current_posx(DR_WORLD)
-                target = [cur[0], cur[1], cur[2] - d, cur[3], cur[4], cur[5]]
-                if not safe_movel(posx(target), ref=DR_WORLD, vel=3, acc=3):
-                    return False
+                    if timeout_s is not None and (time.time() - t0) > float(timeout_s):
+                        self.get_logger().warn("[COMPLIANT] timeout -> fail")
+                        return False
 
-                moved += d
-                if not self._sleep_interruptible(0.02):
-                    self._worker_err = "stopped"
-                    return False
-
-                try:
-                    f = dr.get_tool_force()
-                    raw = float(f[axis])
-                    self.get_logger().info(
-                        f"[TOUCH] force[{axis}]={raw:.2f}N thr={threshold:.2f}N moved={moved:.1f}mm"
-                    )
-                    if abs(raw) >= float(threshold):
-                        self.get_logger().info("[TOUCH] contact detected")
+                    # 조건 만족 시 -1 (Doosan API 관례)
+                    ret = check_force_condition(DR_AXIS_Z, min=0, max=float(threshold_n))
+                    if ret == -1:
+                        self.get_logger().info(f"[COMPLIANT] reached threshold={threshold_n}N")
                         return True
-                except Exception as e:
-                    self.get_logger().warn(f"[TOUCH] force read failed: {e}")
 
-            return False
+                    wait(0.1)
+
+            finally:
+                try:
+                    release_force()
+                except Exception:
+                    pass
+                try:
+                    release_compliance_ctrl()
+                except Exception:
+                    pass
+                try:
+                    set_ref_coord(DR_BASE)
+                except Exception:
+                    pass
+                wait(0.2)
 
         def do_stroke() -> bool:
             # 한 번 stroke 시퀀스 (툴 기준 상대 회전 포함)
@@ -609,8 +640,11 @@ class ScraperMotionNode(Node):
                 self._set_scraper_status(self.STEP_COATING, "접착제 도포중")
 
                 enable_soft_touch_compliance(stx=(4000, 4000, 80, 200, 200, 200))
-                approach_until_contact_world_z(threshold=4.0, max_down_mm=15.0, step_mm=0.5)
-
+                ok = compliant_approach_down(threshold_n=4.0, timeout_s=8.0)
+                if not ok:
+                    self._worker_err = "no_contact"
+                    return False
+                
                 if self._check_abort():
                     self._worker_err = "stopped"
                     return False

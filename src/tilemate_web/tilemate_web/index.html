@@ -65,7 +65,7 @@
         .tile.running  { background-color: #4caf50; border-color: #2e7d32; color: white; }
         .tile.finished { background-color: #1a237e; border-color: #0d124a; color: white; }
         
-        #three-container { flex: 1.5; height: 450px; background: #f8f9fa; border-radius: 12px; border: 1px solid #ccc; }
+        #three-container { width: 100%; height: 450px; background: #f8f9fa; border-radius: 12px; border: 1px solid #ccc; }
 
         /* ── 디자인 선택 팝업 ── */
         .popup-overlay {
@@ -257,7 +257,30 @@
                 </div>
             </div>
         </div>
-        <div id="three-container"></div>
+        <div style="flex: 1.5; position: relative;">
+            <div id="three-container" style="width:100%; height:100%;"></div>
+            <!-- 오른쪽 아래: 완성 패턴 미리보기 -->
+            <div id="pattern-preview" style="
+                display: none;
+                position: absolute;
+                bottom: 12px;
+                right: 12px;
+                background: rgba(255,255,255,0.93);
+                border: 2px solid #1a237e;
+                border-radius: 10px;
+                padding: 8px 10px;
+                box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+                z-index: 10;
+            ">
+                <div style="font-size:0.7em; font-weight:bold; color:#1a237e; margin-bottom:5px; text-align:center;">완성 패턴</div>
+                <div id="pattern-mini-grid" style="
+                    display: grid;
+                    grid-template-columns: repeat(3, 20px);
+                    grid-template-rows: repeat(3, 20px);
+                    gap: 3px;
+                "></div>
+            </div>
+        </div>
     </div>
 
     <!-- 디자인 선택 팝업 -->
@@ -618,6 +641,54 @@
     }
     buildPreviews();
 
+    // -------------------------------------------------------
+    // 완성 패턴 미리보기 (3D 뷰 오른쪽 아래)
+    // -------------------------------------------------------
+    const patternMiniGrid = document.getElementById('pattern-mini-grid');
+    for (let i = 0; i < 9; i++) {
+        const cell = document.createElement('div');
+        cell.id = 'pmini-' + i;
+        cell.style.cssText = 'width:20px; height:20px; border-radius:3px; border:1px solid #ccc; background:#e0e0e0;';
+        patternMiniGrid.appendChild(cell);
+    }
+
+    function showPatternPreview(design) {
+        const pattern = PATTERNS[design];
+        if (!pattern) return;
+        for (let i = 0; i < 9; i++) {
+            const cell = document.getElementById('pmini-' + i);
+            if (!cell) continue;
+            if (pattern[i] === 'B') {
+                cell.style.background = '#212121';
+                cell.style.border = '1px solid #000';
+            } else {
+                cell.style.background = '#ffffff';
+                cell.style.border = '1px solid #bbb';
+            }
+        }
+        document.getElementById('pattern-preview').style.display = 'block';
+    }
+
+    function showCustomPatternPreview(values) {
+        // values: ['A','B','A',...] A=흰 B=검
+        for (let i = 0; i < 9; i++) {
+            const cell = document.getElementById('pmini-' + i);
+            if (!cell) continue;
+            if (values[i] === 'B') {
+                cell.style.background = '#212121';
+                cell.style.border = '1px solid #000';
+            } else {
+                cell.style.background = '#ffffff';
+                cell.style.border = '1px solid #bbb';
+            }
+        }
+        document.getElementById('pattern-preview').style.display = 'block';
+    }
+
+    function hidePatternPreview() {
+        document.getElementById('pattern-preview').style.display = 'none';
+    }
+
     function openDesignPopup() {
         selectedDesign = null;
         [1,2,3].forEach(i => document.getElementById('card-'+i).classList.remove('selected'));
@@ -650,6 +721,7 @@
         database.ref('robot_command').set({ action: 'start', design: selectedDesign, is_resume: false, timestamp: Date.now() });
         // 기존 start 로직
         isStarted = true;
+        showPatternPreview(selectedDesign);
         if (!timerInterval) startTimer();
         const firstTile = document.getElementById('tile-1');
         if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
@@ -739,6 +811,7 @@
         DESIGN_COLORS[3] = customValues.map(v => v === 'B' ? 'B' : 'W');
 
         isStarted = true;
+        showCustomPatternPreview(customValues);
         if (!timerInterval) startTimer();
         const firstTile = document.getElementById('tile-1');
         if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
@@ -854,6 +927,7 @@
         // 4. 3D 타일 초기화
         tiles3D.forEach(mesh => mesh.material.color.setHex(0xaaaaaa));
         updateProcessStep(0);
+        hidePatternPreview();
 
         // 5. Firebase 업데이트 (마지막에 - 리스너 발동해도 isStarted=false라 무시됨)
         database.ref('robot_status').update({

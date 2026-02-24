@@ -184,7 +184,10 @@ class TileMotionNode(Node):
 
     # ---- checkpoint helpers ----
     def _set_ckpt(self, phase: str, tile_i: int):
-        self._checkpoint = {"phase": str(phase), "tile_i": int(tile_i)}
+        new_ckpt = {"phase": str(phase), "tile_i": int(tile_i)}
+        if self._checkpoint == new_ckpt:
+            return  # ✅ 같은 값이면 중복 로그/중복 publish 방지
+        self._checkpoint = new_ckpt
         self.get_logger().info(f"[TILE][CKPT] set {self._checkpoint_to_string()}")
 
     def _checkpoint_to_string(self) -> str:
@@ -363,6 +366,7 @@ class TileMotionNode(Node):
                 return False
             try:
                 movej(j, **kwargs)
+                time.sleep(0.2)
                 return True
             except Exception as e:
                 if self._stop_soft:
@@ -371,12 +375,19 @@ class TileMotionNode(Node):
                 self._worker_err = f"movej failed: {e}"
                 return False
 
+        def _to_posx(p):
+            if isinstance(p, (list, tuple)):
+                return posx(list(p))
+            return p
+
         def safe_movel(p, **kwargs) -> bool:
             if self._check_abort():
                 self._worker_err = "stopped"
                 return False
             try:
-                movel(p, **kwargs)
+                if "ref" not in kwargs:
+                    kwargs["ref"] = DR_BASE  # ✅ 절대좌표는 base 고정
+                movel(_to_posx(p), **kwargs)
                 return True
             except Exception as e:
                 if self._stop_soft:

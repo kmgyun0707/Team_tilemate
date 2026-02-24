@@ -61,6 +61,7 @@
             transition: all 0.4s ease; 
         }
 
+        .tile.coated   { background-color: #9e9e9e; border-color: #757575; color: white; }
         .tile.working  { background-color: #ffc107; border-color: #ff9800; color: white; }
         .tile.running  { background-color: #4caf50; border-color: #2e7d32; color: white; }
         .tile.finished { background-color: #1a237e; border-color: #0d124a; color: white; }
@@ -234,6 +235,10 @@
         <div class="tile-grid-wrapper">
             <div class="tile-grid" id="tile-map"></div>
             <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #9e9e9e; border: 2px solid #757575; border-radius: 4px;"></div>
+                    <span>도포완료</span>
+                </div>
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #ffc107; border: 2px solid #ff9800; border-radius: 4px;"></div>
                     <span>작업중</span>
@@ -564,7 +569,8 @@
             if (resetGuide) resetGuide.style.display = 'block';
         }
 
-        updateProcessStep(data.current_step || 0);
+        const currentStep = data.current_step || 0;
+        updateProcessStep(currentStep);
 
         // design 번호 업데이트
         if (data.design) currentDesign = parseInt(data.design);
@@ -573,6 +579,42 @@
 
         const currentJobs = data.completed_jobs || 0;
 
+        // 현재 작업 중인 타일 인덱스 (완료된 것 다음)
+        const workingTileIdx = currentJobs; // 0~8
+
+        if (currentStep === 1) {
+            // Step1: 완료/마르는중 타일 제외하고 전부 빈 상태
+            for (let i = 1; i <= TOTAL_TILES; i++) {
+                const el = document.getElementById(`tile-${i}`);
+                if (el && !el.classList.contains('finished') && !el.classList.contains('running')) {
+                    el.classList.remove('working', 'coated');
+                    el.innerText = '';
+                }
+            }
+        } else if (currentStep === 2) {
+            // Step2: 9개 전부 한꺼번에 회색(coated)으로 표시
+            for (let i = 1; i <= TOTAL_TILES; i++) {
+                const el = document.getElementById(`tile-${i}`);
+                if (!el || el.classList.contains('finished') || el.classList.contains('running')) continue;
+                el.classList.remove('working');
+                el.classList.add('coated');
+                el.innerText = '';
+            }
+        } else if (currentStep === 3) {
+            // Step3: workingTileIdx+1번 타일 (1~9 순서) 노란색 "작업중"
+            const workingTileId = workingTileIdx + 1; // 1~9
+            if (workingTileId <= TOTAL_TILES) {
+                const el = document.getElementById(`tile-${workingTileId}`);
+                if (el && !el.classList.contains('finished') && !el.classList.contains('running')) {
+                    el.classList.remove('coated');
+                    el.classList.add('working');
+                    el.innerText = '작업중';
+                }
+            }
+        }
+        // Step4: 별도 처리 없음 (completed_jobs 증가로 처리)
+
+        // ── completed_jobs 증가 처리 (Step4 완료 → 초록색) ───
         if (currentJobs > prevCompletedJobs) {
             for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
                 // 완료된 타일에 디자인 색상 적용 (3D)
@@ -583,17 +625,8 @@
                 } else {
                     tiles3D[i - 1].material.color.setHex(0xffffff);
                 }
+                // 2D: working → running(초록, 마르는중) 으로 전환 후 타이머
                 startTileTimer(i, 120);
-            }
-        }
-
-        // 현재 작업 중인 타일 노란색 (2D만)
-        const workingIdx = currentJobs + 1;
-        if (workingIdx <= TOTAL_TILES) {
-            const el = document.getElementById(`tile-${workingIdx}`);
-            if (el && !el.classList.contains('running') && !el.classList.contains('finished')) {
-                el.classList.add('working');
-                el.innerText = '작업중';
             }
         }
 
@@ -723,11 +756,6 @@
         isStarted = true;
         showPatternPreview(selectedDesign);
         if (!timerInterval) startTimer();
-        const firstTile = document.getElementById('tile-1');
-        if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
-            firstTile.classList.add('working');
-            firstTile.innerText = '작업중';
-        }
     }
 
     // ── 커스텀 패턴 팝업 ────────────────────────────────────
@@ -813,11 +841,6 @@
         isStarted = true;
         showCustomPatternPreview(customValues);
         if (!timerInterval) startTimer();
-        const firstTile = document.getElementById('tile-1');
-        if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
-            firstTile.classList.add('working');
-            firstTile.innerText = '작업중';
-        }
     }
 
     function backToDesignPopup() {
@@ -841,12 +864,6 @@
         if (cmd === 'start') {
             isStarted = true;
             if (!timerInterval) startTimer();
-
-            const firstTile = document.getElementById('tile-1');
-            if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
-                firstTile.classList.add('working');
-                firstTile.innerText = '작업중';
-            }
         } else if (cmd === 'stop') {
             pauseTimer();
             // 비상정지 오버레이 표시
@@ -921,7 +938,7 @@
         for (let i = 1; i <= TOTAL_TILES; i++) {
             tileColors[i] = null;
             const el = document.getElementById(`tile-${i}`);
-            if (el) { el.classList.remove('working', 'running', 'finished'); el.innerText = ''; }
+            if (el) { el.classList.remove('working', 'coated', 'running', 'finished'); el.innerText = ''; }
         }
 
         // 4. 3D 타일 초기화
@@ -953,7 +970,7 @@
         const mesh = tiles3D[id - 1];
         if (!el || el.classList.contains('finished')) return;
 
-        el.classList.remove('working');
+        el.classList.remove('working', 'coated');
         el.classList.add('running');
 
         activeTimers[id] = setInterval(() => {

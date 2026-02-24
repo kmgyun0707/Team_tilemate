@@ -97,9 +97,9 @@ class FirebaseBridgeNode(Node):
         self.get_logger().info("Service clients: get_tool_force, get_external_torque")
 
         # ── 충돌 감지 설정 ────────────────────────────────
-        self.COLLISION_THRESHOLD = 50.0   # 관절 외부토크 임계값 (Nm)
-        self.FORCE_THRESHOLD     = 50.0   # TCP 합력 임계값 (N)
-        self.FORCE_Z_THRESHOLD   = 18.0   # TCP Fz 임계값 (N)
+        self.COLLISION_THRESHOLD = 250.0   # 관절 외부토크 임계값 (Nm)
+        self.FORCE_THRESHOLD     = 250.0   # TCP 합력 임계값 (N)
+        self.FORCE_Z_THRESHOLD   = 218.0   # TCP Fz 임계값 (N)
         self._collision_detected = False  # 중복 stop 방지
 
         # throttle 타임스탬프

@@ -13,7 +13,8 @@
 #   ※ /robot/design 은 subscribe 안 함 (bridge가 publish 전용)
 #
 # 서비스 콜 (주기적):
-#   /dsr01/aux_control/get_tool_force → tool_force, force_z
+#   /dsr01/aux_control/get_tool_force      → tool_force, force_z  (툴 끝 외력)
+#   /dsr01/aux_control/get_external_torque → ext_torque           (로봇 각 관절 외부 토크)
 #
 # 발행 토픽 (Firebase → 로봇):
 #   /robot/command   (std_msgs/String)  "start" | "stop" | "reset"
@@ -25,7 +26,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32, String, Float32MultiArray
 from sensor_msgs.msg import JointState
-from dsr_msgs2.srv import GetToolForce
+from dsr_msgs2.srv import GetToolForce, GetExternalTorque
 
 import firebase_admin
 from firebase_admin import credentials, db
@@ -64,6 +65,7 @@ class FirebaseBridgeNode(Node):
             "completed_jobs": 0,
             "tool_force":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
             "force_z":        0.0,
+            "ext_torque":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
         })
 
         # ── Publisher: 웹 명령 → 로봇 ──────────────────────
@@ -87,10 +89,12 @@ class FirebaseBridgeNode(Node):
                                "/dsr01/joint_states")
         self.get_logger().info("Publishing: /robot/command, /robot/design, /robot/design_ab")
 
-        # ── 서비스 클라이언트: tool_force ──────────────────
-        self._tool_force_client = self.create_client(GetToolForce, '/dsr01/aux_control/get_tool_force')
-        self.create_timer(0.3, self._timer_get_tool_force)  # 0.3초마다 호출
-        self.get_logger().info("Service client: /dsr01/aux_control/get_tool_force")
+        # ── 서비스 클라이언트 ──────────────────────────────
+        self._tool_force_client = self.create_client(GetToolForce,     '/dsr01/aux_control/get_tool_force')
+        self._ext_torque_client = self.create_client(GetExternalTorque, '/dsr01/aux_control/get_external_torque')
+        self.create_timer(0.3, self._timer_get_tool_force)
+        self.create_timer(0.3, self._timer_get_ext_torque)
+        self.get_logger().info("Service clients: get_tool_force, get_external_torque")
 
         # throttle 타임스탬프
         self._last_tcp_update   = 0.0
@@ -104,7 +108,7 @@ class FirebaseBridgeNode(Node):
         self._cmd_thread = threading.Thread(target=self._watch_firebase_command, daemon=True)
         self._cmd_thread.start()
 
-    # ── tool_force 서비스 콜 타이머 ───────────────────────
+    # ── tool_force 서비스 콜 ──────────────────────────────
     def _timer_get_tool_force(self):
         if not self._tool_force_client.service_is_ready():
             return
@@ -128,6 +132,26 @@ class FirebaseBridgeNode(Node):
                 })
         except Exception as e:
             self.get_logger().error(f"[FORCE] error: {e}")
+
+    # ── ext_torque 서비스 콜 ──────────────────────────────
+    def _timer_get_ext_torque(self):
+        if not self._ext_torque_client.service_is_ready():
+            return
+        req = GetExternalTorque.Request()
+        future = self._ext_torque_client.call_async(req)
+        future.add_done_callback(self._cb_ext_torque_response)
+
+    def _cb_ext_torque_response(self, future):
+        try:
+            res = future.result()
+            if res.success:
+                torque_dict = {
+                    str(i): 0.0 if math.isnan(v) else float(round(v, 2))
+                    for i, v in enumerate(res.ext_torque)
+                }
+                self.ref.update({"ext_torque": torque_dict})
+        except Exception as e:
+            self.get_logger().error(f"[EXT_TORQUE] error: {e}")
 
     # ── Firebase 명령 감지 루프 ────────────────────────────
     def _watch_firebase_command(self):
@@ -214,6 +238,7 @@ class FirebaseBridgeNode(Node):
                                 "design_ab":      "",
                                 "tool_force":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
                                 "force_z":        0.0,
+                                "ext_torque":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
                             })
                             self.get_logger().info("[RESET] Firebase robot_status 전체 초기화 완료")
 
@@ -244,7 +269,7 @@ class FirebaseBridgeNode(Node):
 
     def _cb_joint_states(self, msg: JointState):
         now = time.time()
-        if now - self._last_joint_update < 0.5:  # 0.5초 throttle
+        if now - self._last_joint_update < 0.5:
             return
         self._last_joint_update = now
         vel = msg.velocity
@@ -254,7 +279,7 @@ class FirebaseBridgeNode(Node):
 
     def _cb_tcp(self, msg: Float32MultiArray):
         now = time.time()
-        if now - self._last_tcp_update < 0.2:  # 0.2초 throttle
+        if now - self._last_tcp_update < 0.2:
             return
         self._last_tcp_update = now
         data = msg.data

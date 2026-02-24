@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # tilemate_main/tile_motion_node.py
 # 타일 9개 배치 작업을 수행하는 ROS2 노드
-# 0223: 8개 타일 배치하는 코드 - 중간에 공중에서 떨어지는 타일 1개 
+# 0223: 8개 타일 배치하는 코드 - 중간에 공중에서 떨어지는 타일 1개 #
 
 import time
 import traceback

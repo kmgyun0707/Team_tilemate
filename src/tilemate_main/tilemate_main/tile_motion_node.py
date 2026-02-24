@@ -388,6 +388,7 @@ class TileMotionNode(Node):
                 if "ref" not in kwargs:
                     kwargs["ref"] = DR_BASE  # ✅ 절대좌표는 base 고정
                 movel(_to_posx(p), **kwargs)
+                time.sleep(0.5)
                 return True
             except Exception as e:
                 if self._stop_soft:
@@ -591,6 +592,8 @@ class TileMotionNode(Node):
 
             self._set_ckpt("TOOL_LIFT", 1)
             if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC): return False
+            
+            if not move_relative(0, 100, 0): return False
 
             self._set_tile_status(self.STEP_IDLE, "안전구역(Waypoint) 이동")
             self._set_ckpt("TOOL_WAYPOINT", 1)
@@ -641,13 +644,13 @@ class TileMotionNode(Node):
             if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 하강 - {tile_i}번")
-            if not compliant_approach(threshold_n=13.0, timeout_s=5.0):
+            if not compliant_approach(threshold_n=13.0, timeout_s=10.0):
                 self._worker_err = "stopped" if self._stop_soft else "pick_compliant_failed"
                 return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 상승 - {tile_i}번")
             if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
-
+            time.sleep(0.5)
             if not move_relative(0, 100, 0): return False
 
             # ---------------- PLACE ----------------

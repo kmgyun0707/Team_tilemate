@@ -80,7 +80,7 @@ class _GripperClient:
 
 class TileMotionNode(Node):
     STEP_IDLE   = 0
-    STEP_PICK   = 3 # 수정금지 ! 타일에서 3 4 -> 태스크 매니저에 3,4로 매핑되어있음 
+    STEP_PICK   = 3  # 수정금지 ! 타일에서 3 4 -> 태스크 매니저에 3,4로 매핑되어있음
     STEP_PLACE  = 4
     STEP_DETACH = 4
     STEP_DONE   = 5
@@ -118,14 +118,14 @@ class TileMotionNode(Node):
         self.pub_status = self.create_publisher(String, "/tile/status", 10)
         self.pub_step   = self.create_publisher(Int32,  "/tile/step", 10)
         self.pub_state  = self.create_publisher(String, "/robot/state", 10)
-        self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10) # 타일 각각 작업 완료시 퍼블리셔
+        self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10)  # 타일 각각 작업 완료시 퍼블리셔
 
         # subs
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
         self.create_subscription(Bool,  "/tile/resume",   self._cb_resume, 10)
         self.create_subscription(Bool,  "/task/pause",    self._cb_pause, 10)
-        self.create_subscription(Bool,  "/task/stop_soft",self._cb_stop_soft, 10)
-        self.create_subscription(String,"/robot/design_ab", self._cb_design_ab, 10)
+        self.create_subscription(Bool,  "/task/stop_soft", self._cb_stop_soft, 10)
+        self.create_subscription(String, "/robot/design_ab", self._cb_design_ab, 10)
 
         self._design_pattern = ["B"] * 9
         self.gripper = _GripperClient(self)
@@ -227,15 +227,17 @@ class TileMotionNode(Node):
         self.get_logger().warn("[TILE] resume requested (/tile/resume)")
         self._resume_requested = True
 
-
+    # -----------------
+    # tool return (UPDATED: + home move)
+    # -----------------
     def return_tool(self) -> bool:
         """
-        ✅ 작업 완료 시 흡착 툴을 거치대에 반납.
+        ✅ 작업 완료 시 흡착 툴을 거치대에 반납 + 홈(JReady) 복귀.
         - stop_soft / pause 고려: 각 구간마다 _check_abort(), _wait_if_paused()로 중단/일시정지 대응
         - 실제 즉시정지는 interrupt_node(MoveStop)가 담당 (여긴 "다음 모션 발행 차단"만 보장)
         - 성공 True / 중단 또는 실패 False
         """
-        from DSR_ROBOT2 import movel, wait, posx, DR_BASE
+        from DSR_ROBOT2 import movel, wait, posx, DR_BASE, movej
 
         self.get_logger().info("[TILE] 작업 완료. 흡착 툴을 거치대에 반납합니다...")
 
@@ -286,7 +288,17 @@ class TileMotionNode(Node):
             if not self._sleep_interruptible(0.2):
                 return False
 
-            self.get_logger().info("✅ [TILE] 흡착 툴 반납 완료!")
+            # ✅ 6) 홈(JReady) 복귀
+            self._wait_if_paused()
+            if self._check_abort():
+                return False
+            JReady = [0, 0, 90, 0, 90, 90]
+            self.get_logger().info("✅ [TILE] 툴 반납 완료 -> 홈(JReady) 복귀")
+            movej(JReady, vel=20, acc=20)
+            if not self._sleep_interruptible(0.2):
+                return False
+
+            self.get_logger().info("✅ [TILE] 흡착 툴 반납 + 홈 복귀 완료!")
             return True
 
         except Exception as e:
@@ -296,8 +308,6 @@ class TileMotionNode(Node):
                 return False
             self.get_logger().error(f"[TILE][RETURN_TOOL] failed: {e}")
             return False
-
-
 
     # -----------------
     # tick (worker orchestration)
@@ -526,7 +536,7 @@ class TileMotionNode(Node):
             return self._sleep_interruptible(1.0)
 
         def compliant_approach(threshold_n=11.0, timeout_s=10.0) -> bool:
-            # ✅ 반드시 timeout/stop 체크가 있는 버전으로 교체 추천
+            # ✅ 반드시 timeout/stop 체크가 있는 버전
             from DSR_ROBOT2 import (
                 set_ref_coord, task_compliance_ctrl, set_desired_force,
                 check_force_condition, release_force, release_compliance_ctrl,
@@ -560,10 +570,14 @@ class TileMotionNode(Node):
                         return True
                     wait(0.05)
             finally:
-                try: release_force()
-                except Exception: pass
-                try: release_compliance_ctrl()
-                except Exception: pass
+                try:
+                    release_force()
+                except Exception:
+                    pass
+                try:
+                    release_compliance_ctrl()
+                except Exception:
+                    pass
                 wait(0.1)
 
         def detach_tile(tile_idx: int) -> bool:
@@ -588,7 +602,7 @@ class TileMotionNode(Node):
                 tilt_angle = -26 if (tile_idx % 3 == 0) else 24
                 tilt_forward = posx([0, 0, 0, 0, tilt_angle, 0])
                 movel(tilt_forward, vel=30, acc=30, ref=DR_TOOL, time=0.5)
-                
+
                 wait(0.2)
                 return True
             finally:
@@ -648,29 +662,35 @@ class TileMotionNode(Node):
 
             self._set_tile_status(self.STEP_IDLE, "JReady 이동 및 도구 파지")
             self._set_ckpt("JREADY", int(ck.get("tile_i", 1)))
-            if not safe_movej(JReady, vel=VELOCITY, acc=ACC): return False
+            if not safe_movej(JReady, vel=VELOCITY, acc=ACC):
+                return False
 
             # ----- tool grasp sequence -----
             self._set_ckpt("TOOL_RELEASE", 1)
             self.gripper.release()
 
             self._set_ckpt("TOOL_APPROACH_ABOVE", 1)
-            if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC):
+                return False
 
             self._set_ckpt("TOOL_APPROACH_DOWN", 1)
-            if not safe_movel(posx(TOOL_GRIP_DOWN),  vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_GRIP_DOWN), vel=VELOCITY, acc=ACC):
+                return False
 
             self._set_ckpt("TOOL_GRAB", 1)
             self.gripper.grab()
 
             self._set_ckpt("TOOL_LIFT", 1)
-            if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC): return False
-            
-            if not move_relative(0, 100, 0): return False
+            if not safe_movel(posx(TOOL_GRIP_ABOVE), vel=VELOCITY, acc=ACC):
+                return False
+
+            if not move_relative(0, 100, 0):
+                return False
 
             self._set_tile_status(self.STEP_IDLE, "안전구역(Waypoint) 이동")
             self._set_ckpt("TOOL_WAYPOINT", 1)
-            if not safe_movel(posx(TOOL_WAYPOINT), vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(TOOL_WAYPOINT), vel=VELOCITY, acc=ACC):
+                return False
 
             # 다음 단계 진입 ckpt
             next_tile_i = int(ck.get("tile_i", 1))
@@ -688,10 +708,11 @@ class TileMotionNode(Node):
             self._worker_err = f"invalid_phase_before_tile_loop:{ph}"
             return False
 
-
         start_tile_i = int(ck.get("tile_i", 1))
-        if start_tile_i < 1: start_tile_i = 1
-        if start_tile_i > 9: start_tile_i = 9
+        if start_tile_i < 1:
+            start_tile_i = 1
+        if start_tile_i > 9:
+            start_tile_i = 9
 
         # tile_i-1 인덱스부터 진행
         for idx in range(start_tile_i - 1, len(place_targets)):
@@ -714,7 +735,8 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 준비({color_name}) - {tile_i}번")
-            if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC):
+                return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 하강 - {tile_i}번")
             if not compliant_approach(threshold_n=13.0, timeout_s=10.0):
@@ -723,8 +745,10 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_PICK, f"타일 파지 상승 - {tile_i}번")
-            if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC): return False
-            if not move_relative(0, 100, 0): return False
+            if not safe_movel(posx(pick_pos), vel=VELOCITY, acc=ACC):
+                return False
+            if not move_relative(0, 100, 0):
+                return False
 
             # ---------------- PLACE ----------------
             self._set_ckpt("PLACE", tile_i)
@@ -733,7 +757,8 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_PLACE, f"타일 배치 상부 - {tile_i}번")
-            if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC):
+                return False
 
             self._set_tile_status(self.STEP_PLACE, f"타일 배치 하강 - {tile_i}번")
             if not compliant_approach(threshold_n=11.0, timeout_s=10.0):
@@ -747,17 +772,18 @@ class TileMotionNode(Node):
                 return False
 
             self._set_tile_status(self.STEP_DETACH, f"타일 박리(detach) - {tile_i}번")
-            if not detach_tile(tile_i): return False
+            if not detach_tile(tile_i):
+                return False
 
             self._set_tile_status(self.STEP_PLACE, f"타일 배치 상부 복귀 - {tile_i}번")
-            if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC): return False
+            if not safe_movel(posx(place_pos), vel=VELOCITY, acc=ACC):
+                return False
 
             self.get_logger().info(f"🎉 {tile_i}번 타일 완료")
             m = Int32()
-            m.data = int(tile_i)  # 또는 누적 완료 개수면 idx+1
+            m.data = int(tile_i)
             self.pub_completed_jobs.publish(m)
             self.get_logger().info(f"[TILE] publish /robot/completed_jobs={m.data}")
-            
 
             # 다음 타일로 넘어가기 전에 checkpoint advance
             # (다음 resume는 tile_i+1의 PICK부터 시작)
@@ -765,7 +791,7 @@ class TileMotionNode(Node):
                 self._set_ckpt("PICK", tile_i + 1)
 
         # all done
-        # ✅ 완료 후 툴 반납 (stop_soft / pause 고려)
+        # ✅ 완료 후 툴 반납 (+ return_tool 안에서 홈 복귀까지 수행)
         self._set_ckpt("TOOL_RETURN_WAYPOINT", 0)
         if not self.return_tool():
             self._worker_err = "stopped" if self._stop_soft else "return_tool_failed"

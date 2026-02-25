@@ -110,9 +110,7 @@
             border-radius: 4px;
             border: 1px solid #ccc;
         }
-        .pc-white { background: #ffffff; border-color: #ccc; }
         .pc-black { background: #212121; border-color: #000; }
-        .pc-deco  { background: #ffffff; border-color: #ccc; }
         .popup-confirm {
             display: block; margin: 24px auto 0;
             padding: 14px 48px; font-size: 1.2em; font-weight: bold;
@@ -141,7 +139,7 @@
     <div class="info-grid">
         <div id="timer-container">타일링 시간: <span id="timer">00 : 00 : 00</span></div>
         <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">9</span></div>
-        <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0.0</span>%</div>
+        <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0.000</span> m/s</div>
         <div class="info-item">툴 외력 Fz: <span id="force-z">0.00</span> N &nbsp;|&nbsp; 합력: <span id="force-total">0.00</span> N</div>
         <div class="info-item" style="text-align: right;">상태: <span id="robot-state">대기</span></div>
         <div class="info-item" colspan="2" style="grid-column: span 2;">
@@ -213,7 +211,7 @@
                 background: rgba(0,0,0,0.4);
                 padding: 8px 20px;
                 border-radius: 8px;
-            ">충돌 원인 제거 후 아래 초기화 버튼을 눌러주세요</div>
+            ">충돌 원인 제거 후 재개버튼이나 초기화 버튼을 눌러주세요</div>
             <button id="resume-btn" onclick="resumeRobot()" style="
                 pointer-events: all;
                 padding: 14px 44px;
@@ -519,15 +517,13 @@
         if (!data) return;
 
         // -------------------------------------------------------
-        // 로봇속도 표시 (관절속도 합력 기반)
-        // Firebase의 joint_speed: √(v1²+v2²+...+v6²) (단위: rad/s)
-        // M0609 최대 관절속도 ≈ 3.14 rad/s (180°/s), 6축 합력 최대치를 7.0으로 설정
-        // 0~100% 로 정규화해서 표시 (실제 동작 중 최대값에 따라 MAX_JOINT_SPEED 조정 가능)
+        // 로봇속도 표시 (Jacobian 기반 TCP 선속도)
+        // firebase_bridge.py에서 관절 각도(position) + 각속도(velocity)로
+        // Jacobian 계산 후 TCP 선속도(m/s)를 Firebase에 저장
         // -------------------------------------------------------
-        const MAX_JOINT_SPEED = 7.0;
         const rawJointSpeed = data.joint_speed || 0;
-        const speedPercent = Math.min(100, (rawJointSpeed / MAX_JOINT_SPEED * 100)).toFixed(1);
-        document.getElementById('robot-speed').innerText     = speedPercent;
+        const speedMps = rawJointSpeed.toFixed(3);
+        document.getElementById('robot-speed').innerText = speedMps;
 
         document.getElementById('robot-state').innerText = data.state || "대기";
         document.getElementById('job-count').innerText  = data.completed_jobs || 0;
@@ -553,7 +549,8 @@
                 pauseTimer();
             }
             const resumeBtn = document.getElementById('resume-btn');
-            if (resumeBtn) resumeBtn.style.display = 'none';
+            // 외력 감지시 재개버튼 숨기려면 none 보이려면 ''
+            if (resumeBtn) resumeBtn.style.display = '';
             const info = document.getElementById('collision-info');
             if (data.collision_joint !== undefined && data.collision_torque !== undefined) {
                 info.style.display = 'block';
@@ -817,13 +814,13 @@
         pg.innerHTML = '';
         customValues.forEach(v => {
             const cell = document.createElement('div');
-            cell.className = 'preview-cell ' + (v === 'B' ? 'pc-black' : '');
+            cell.className = 'preview-cell ' + (v === 'A' ? 'pc-black' : '');
             pg.appendChild(cell);
         });
     }
 
     function confirmCustomPattern() {
-        // A=흰색 B=검정 → firebase_bridge가 /robot/design_ab에 publish
+        // A=검정 B=흰색 → firebase_bridge가 /robot/design_ab에 publish
         const patternStr = customValues.join(','); // 예: "A,B,A,B,A,B,A,B,A"
         closePopup();
 
@@ -836,7 +833,7 @@
         });
 
         // DESIGN_COLORS에 커스텀 패턴 반영 (3D/2D 색상용)
-        DESIGN_COLORS[3] = customValues.map(v => v === 'B' ? 'B' : 'W');
+        DESIGN_COLORS[3] = customValues.map(v => v === 'B' ? 'W' : 'B');
 
         isStarted = true;
         showCustomPatternPreview(customValues);

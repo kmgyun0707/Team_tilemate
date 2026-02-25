@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
 # tilemate_main/interrupt_node.py
-#
-# ✅ 목표
-# - reset 시 MoveStop은 호출하지 않음
-# - stop_soft=True publish로 motion 노드들을 멈추게 함
-# - 로봇이 "노란불"(SAFE_STOP=5 / SAFE_OFF=3)이면 SetRobotControl로 STANDBY(1) 복귀
-# - 그 다음 MoveJoint(JREADY)로 홈 이동
-#
-# ✅ 핵심 수정
-# - 콜백 안에서 spin_until_future_complete()로 블로킹하지 않음
-# - 타이머 기반 상태머신으로 call_async future를 안전하게 처리 (SingleThreaded에서도 안정)
-#
-# Inputs:
-#   - /robot/command (String): stop, pause, unpause, resume, reset
-#   - /task/reset (Bool): True 펄스
-# Outputs:
-#   - /task/pause (Bool)
-#   - /task/stop_soft (Bool)
-#   - /scraper/resume (Bool)
-#   - /tile/resume (Bool)
 
 import time
 import rclpy
@@ -64,7 +45,7 @@ class InterruptNode(Node):
         self.cli_set_ctrl  = self.create_client(SetRobotControl, "/dsr01/system/set_robot_control")
         self.cli_set_mode  = self.create_client(SetRobotMode,  "/dsr01/system/set_robot_mode")
 
-        # JReady (deg) - 필요시 네 값으로 교체
+        # JReady (deg) 
         self.JREADY = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]
 
         # reset state machine

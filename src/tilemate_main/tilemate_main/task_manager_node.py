@@ -36,21 +36,23 @@ class TaskManagerNode(Node):
         self._phase = "IDLE"        # IDLE / SCRAPER / TILE
         self._active_token = 0      # 현재 사이클 token
 
-        # publishers
+        # publishers------------------------------------------------------------
         self.pub_scraper = self.create_publisher(Int32, "/scraper/run_once", 10)
         self.pub_tile    = self.create_publisher(Int32, "/tile/run_once", 10)
 
+        # 내부 제어용 토픽
+        self.pub_reset   = self.create_publisher(Bool, "/task/reset", 10)     # motion node 내부 상태 리셋
         self.pub_pause     = self.create_publisher(Bool, "/task/pause", 10)
         self.pub_stop_soft = self.create_publisher(Bool, "/task/stop_soft", 10)
-
+        # 웹 트리거 
         self.pub_step = self.create_publisher(Int32, "/robot/step", 10)
         self._set_step(self.STEP_READY)
 
-        # subscribers
+        # subscribers----------------------------------------------------------
         self.create_subscription(String, "/robot/command", self._cb_cmd, 10)
         self.create_subscription(String, "/scraper/status", self._cb_scraper_status, 10)
         self.create_subscription(String, "/tile/status", self._cb_tile_status, 10)
-        # ✅ 각 노드 step 구독
+        # 각 노드 step 구독
         self.create_subscription(Int32, "/scraper/step", self._cb_scraper_step, 10)
         self.create_subscription(Int32, "/tile/step", self._cb_tile_step, 10)
 
@@ -167,11 +169,26 @@ class TaskManagerNode(Node):
             self._pub_bool(self.pub_stop_soft, True)
 
         elif cmd == "reset":
-            self.get_logger().warn("[TASK] reset -> stop_soft True + abort")
-            self._pub_bool(self.pub_pause, False)
-            self._pub_bool(self.pub_stop_soft, True)
-            self._finish_abort(reset_step=True)
+            self.get_logger().warn("[TASK] reset requested")
 
+            # 1) task 상태 IDLE + token invalidate
+            self._finish_abort(reset_step=True)
+            self._active_token += 1
+
+            # 2) pause 해제
+            self._pub_bool(self.pub_pause, False)
+
+            # 3) 로봇 정지(인터럽트/액션레이어가 받게)
+            self._pub_bool(self.pub_stop_soft, True)
+
+            # 4) reset 펄스 (액션레이어가 이걸 보고 home까지 수행)
+            self._pub_bool(self.pub_reset, True)
+            self._pub_bool(self.pub_reset, False)
+
+            # 5) stop_soft latch 방지(권장)
+            self._pub_bool(self.pub_stop_soft, False)
+
+            self.get_logger().warn("[TASK] reset -> READY")
         else:
             self.get_logger().warn(f"[TASK] unknown command: {cmd}")
 

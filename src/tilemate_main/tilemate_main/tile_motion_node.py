@@ -600,6 +600,8 @@ class TileMotionNode(Node):
                 wait(0.2)
 
                 tilt_angle = -26 if (tile_idx % 3 == 0) else 24
+                if tile_idx == 3:
+                    tilt_angle = -30
                 tilt_forward = posx([0, 0, 0, 0, tilt_angle, 0])
                 movel(tilt_forward, vel=30, acc=30, ref=DR_TOOL, time=0.5)
 

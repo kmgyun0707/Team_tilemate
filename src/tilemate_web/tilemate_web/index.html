@@ -164,6 +164,8 @@
         <div id="step3" class="step">타일 파지</div>
         <div class="step">→</div>
         <div id="step4" class="step">타일 배치</div>
+        <div class="step">→</div>
+        <div id="step5" class="step">타일 압착</div>
     </div>
 
     <div class="bottom-section" id="bottom-section" style="position: relative;">
@@ -211,7 +213,7 @@
                 background: rgba(0,0,0,0.4);
                 padding: 8px 20px;
                 border-radius: 8px;
-            ">충돌 원인 제거 후 재개버튼이나 초기화 버튼을 눌러주세요</div>
+            ">충돌 원인 제거 후 재개 또는 초기화 버튼을 눌러주세요</div>
             <button id="resume-btn" onclick="resumeRobot()" style="
                 pointer-events: all;
                 padding: 14px 44px;
@@ -549,7 +551,6 @@
                 pauseTimer();
             }
             const resumeBtn = document.getElementById('resume-btn');
-            // 외력 감지시 재개버튼 숨기려면 none 보이려면 ''
             if (resumeBtn) resumeBtn.style.display = '';
             const info = document.getElementById('collision-info');
             if (data.collision_joint !== undefined && data.collision_torque !== undefined) {
@@ -634,15 +635,62 @@
     // 공정 단계 업데이트
     // -------------------------------------------------------
     function updateProcessStep(stepNumber) {
-        for (let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= 5; i++) {
             const el = document.getElementById('step' + i);
             if (el) el.classList.remove('active');
         }
-        if (stepNumber > 0 && stepNumber <= 4) {
+        if (stepNumber > 0 && stepNumber <= 5) {
             const el = document.getElementById('step' + stepNumber);
             if (el) el.classList.add('active');
         }
     }
+
+    // -------------------------------------------------------
+    // /robot/press 토픽 → Firebase press_tile 수신
+    // press_tile: 1~9 (현재 압착 중인 타일 번호)
+    // -------------------------------------------------------
+    let prevPressTile = null;
+
+    database.ref('robot_status/press_tile').on('value', (snapshot) => {
+        const pressTile = snapshot.val();
+
+        // 이전 타일 압착 완료 → 글자 제거
+        if (prevPressTile && prevPressTile >= 1 && prevPressTile <= TOTAL_TILES) {
+            const prevEl = document.getElementById(`tile-${prevPressTile}`);
+            if (prevEl) prevEl.innerText = '';
+        }
+
+        if (!pressTile || pressTile < 1 || pressTile > TOTAL_TILES) {
+            prevPressTile = null;
+            return;
+        }
+
+        // 해당 타일을 선택한 패턴 색상으로 변경 (2D)
+        const el = document.getElementById(`tile-${pressTile}`);
+        if (!el) return;
+
+        const color = getTileColor(currentDesign, pressTile);
+        const isBlack = (color === 0x212121);
+
+        // 타이머 중지 (running 상태였다면)
+        if (activeTimers[pressTile]) {
+            clearInterval(activeTimers[pressTile]);
+            delete activeTimers[pressTile];
+        }
+
+        el.classList.remove('working', 'coated', 'running', 'finished');
+        el.style.backgroundColor = isBlack ? '#212121' : '#ffffff';
+        el.style.borderColor     = isBlack ? '#000000' : '#cccccc';
+        el.style.color           = isBlack ? '#ffffff' : '#333333';
+        el.innerText = '압착중';
+
+        // 3D도 색상 반영
+        if (tiles3D[pressTile - 1]) {
+            tiles3D[pressTile - 1].material.color.setHex(color !== null ? color : 0xffffff);
+        }
+
+        prevPressTile = pressTile;
+    });
 
 
     // -------------------------------------------------------
@@ -935,8 +983,15 @@
         for (let i = 1; i <= TOTAL_TILES; i++) {
             tileColors[i] = null;
             const el = document.getElementById(`tile-${i}`);
-            if (el) { el.classList.remove('working', 'coated', 'running', 'finished'); el.innerText = ''; }
+            if (el) {
+                el.classList.remove('working', 'coated', 'running', 'finished');
+                el.style.backgroundColor = '';
+                el.style.borderColor     = '';
+                el.style.color           = '';
+                el.innerText = '';
+            }
         }
+        prevPressTile = null;
 
         // 4. 3D 타일 초기화
         tiles3D.forEach(mesh => mesh.material.color.setHex(0xaaaaaa));

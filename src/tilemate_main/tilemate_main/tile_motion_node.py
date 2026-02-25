@@ -585,7 +585,7 @@ class TileMotionNode(Node):
                 set_robot_mode(ROBOT_MODE_AUTONOMOUS)
                 wait(0.2)
 
-                tilt_angle = -24 if (tile_idx % 3 == 0) else 24
+                tilt_angle = -26 if (tile_idx % 3 == 0) else 24
                 tilt_forward = posx([0, 0, 0, 0, tilt_angle, 0])
                 movel(tilt_forward, vel=30, acc=30, ref=DR_TOOL, time=0.5)
                 

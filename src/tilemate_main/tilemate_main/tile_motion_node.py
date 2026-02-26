@@ -2,12 +2,17 @@
 # tilemate_main/tile_motion_node.py
 #
 # ✅ Option B: Stop -> Resume(앱 레벨 재시작)
-# ✅ 추가 요구: /tile/step
+# ✅ 이 노드는 "타일 배치(픽/플레이스 + 흡착툴 반납)"까지만 담당
+#    - 단차측정(INSPECT) / 압착(COMPACT)은 분리된 노드가 담당하고,
+#      TaskManager가 순서를 오케스트레이션함.
+#
+# /tile/step (TaskManager 매핑용)
+#   0: IDLE
 #   3: TILE_PICK
 #   4: TILE_PLACE
-#   5: INSPECT(압착할 곳 확인)
-#   6: COMPACT(압착 시작)
-#   7: DONE(압착 끝/전체 종료)
+#
+# /tile/status
+#   done:<token> / stopped:<token>:<ckpt> / error:<token>:<msg>
 
 import time
 import traceback
@@ -16,7 +21,7 @@ from typing import Any, Dict, Optional, List, Tuple
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, Int32, Float64, String, Float32MultiArray
+from std_msgs.msg import Bool, Int32, Float64, String
 
 import DR_init
 from tilemate_main.robot_config import RobotConfig
@@ -30,8 +35,6 @@ ACC = 30
 
 OPEN_W  = 0.040
 CLOSE_W = 0.019
-
-COMPACT_CLOSE_W = 0.005
 
 
 # ----------------------------
@@ -53,10 +56,6 @@ PLACE_TILT_BASE09 = [539.05,  20.33, 227.54, 75.0, 178.60, 77.00]
 TOOL_GRIP_ABOVE = [531.2, -101.3, 210, 169.29, 177.87, 169.98]
 TOOL_GRIP_DOWN  = [531.2, -101.3, 165, 169.29, 177.87, 169.98]
 TOOL_WAYPOINT   = [470, 24, 230, 6, -179, 97]
-
-COMPACT_TOOL_ABOVE = [531.2, -101.3 - 87, 220.0, 169.29, 177.87, 169.98]
-COMPACT_TOOL_DOWN  = [531.2, -101.3 - 87, 146.0, 169.29, 177.87, 169.98]
-COMPACT_TOOL_WAYPOINT = [470.0, 24.0, 230.0, 6.0, -179.0, 97.0]
 
 
 class _GripperClient:
@@ -80,20 +79,12 @@ class _GripperClient:
         self.set_width(OPEN_W)
         time.sleep(1.0)
 
-    def close_fully(self):
-        self._node.get_logger().info("[GRIPPER] 기울기 측정을 위해 그리퍼 완전 닫기(0.0)")
-        self.set_width(0.0)
-        time.sleep(1.0)
-
 
 class TileMotionNode(Node):
     # ✅ /tile/step 정의 (TaskManager가 그대로 매핑)
-    STEP_IDLE    = 0
-    STEP_PICK    = 3
-    STEP_PLACE   = 4
-    STEP_INSPECT = 5
-    STEP_COMPACT = 6
-    STEP_DONE    = 7
+    STEP_IDLE  = 0
+    STEP_PICK  = 3
+    STEP_PLACE = 4
 
     def __init__(self, cfg: RobotConfig, boot_node: Node):
         super().__init__("tile_motion_node", namespace=cfg.robot_id)
@@ -110,10 +101,6 @@ class TileMotionNode(Node):
         self._checkpoint: Optional[Dict[str, Any]] = None
         self._stopped = False
 
-        self._needs_compaction: Dict[int, bool] = {}
-        self._press_error_mm: Dict[int, float] = {}
-        self._current_pressing_tile: int = 0
-
         self._running = False
         self._worker = None
         self._worker_done = True
@@ -127,10 +114,6 @@ class TileMotionNode(Node):
         self.pub_state  = self.create_publisher(String, "/robot/state", 10)
         self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10)
 
-        self.pub_press      = self.create_publisher(Float32MultiArray, "/robot/press", 10) # 단차 측정값 
-        self.pub_press_tile = self.create_publisher(Int32, "/robot/press_tile", 10) # 단차를 측정 중인 타일번호
-        self.pub_pressing   = self.create_publisher(Int32, "/robot/pressing", 10) # 압착하고 있는 타일 번호
-        
         # subs
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
         self.create_subscription(Bool,  "/tile/resume",   self._cb_resume, 10)
@@ -143,7 +126,7 @@ class TileMotionNode(Node):
 
         self._initialize_robot()
         self._set_tile_status(self.STEP_IDLE, "작업명령 대기중")
-        self.get_logger().info("TileMotionNode ready!!!")
+        self.get_logger().info("TileMotionNode(PLACE only) ready!!!")
 
     # -----------------
     # init / helpers
@@ -168,20 +151,6 @@ class TileMotionNode(Node):
         m = String(); m.data = s
         self.pub_status.publish(m)
         self.get_logger().info(f"[TILE->STATUS] {m.data}")
-
-    def _pub_press_tile(self, tile_i: int):
-        m = Int32(); m.data = int(tile_i)
-        self.pub_press_tile.publish(m)
-
-    def _pub_pressing(self, tile_i: int):
-        self._current_pressing_tile = int(tile_i)
-        m = Int32(); m.data = int(tile_i)
-        self.pub_pressing.publish(m)
-
-    def _pub_press_error(self, values: List[float]):
-        m = Float32MultiArray()
-        m.data = [float(v) for v in values]
-        self.pub_press.publish(m)
 
     def _wait_if_paused(self):
         if self._pause:
@@ -249,11 +218,11 @@ class TileMotionNode(Node):
         self._resume_requested = True
 
     # -----------------
-    # tool return / compact tool
+    # suction tool return
     # -----------------
     def return_tool(self) -> bool:
         from DSR_ROBOT2 import movel, wait, posx, DR_BASE, movej
-        self.get_logger().info("[TILE] 작업 완료. 흡착 툴을 거치대에 반납합니다...")
+        self.get_logger().info("[TILE] 배치 완료. 흡착 툴을 거치대에 반납합니다...")
 
         if self._check_abort():
             self.get_logger().warn("[TILE][RETURN_TOOL] aborted before start")
@@ -289,51 +258,6 @@ class TileMotionNode(Node):
             self.get_logger().error(f"[TILE][RETURN_TOOL] failed: {e}")
             return False
 
-    def handle_compact_tool(self, action="GRAB") -> bool:
-        from DSR_ROBOT2 import movel, wait, posx, DR_BASE
-        action = str(action).upper().strip()
-        if action not in ("GRAB", "RETURN"):
-            self.get_logger().error(f"[TILE][COMPACT_TOOL] invalid action={action}")
-            return False
-
-        self.get_logger().info(f"[TILE] 압착 툴 {action} 시작...")
-        if self._check_abort():
-            return False
-
-        try:
-            movel(posx(list(COMPACT_TOOL_WAYPOINT)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-            if not self._sleep_interruptible(0.2): return False
-
-            movel(posx(list(COMPACT_TOOL_ABOVE)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-            if not self._sleep_interruptible(0.2): return False
-
-            if action == "GRAB":
-                self.gripper.release()
-                movel(posx(list(COMPACT_TOOL_DOWN)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-                wait(0.5)
-                self.gripper.set_width(COMPACT_CLOSE_W)
-                time.sleep(1.0)
-                movel(posx(list(COMPACT_TOOL_ABOVE)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-                if not self._sleep_interruptible(0.2): return False
-            else:
-                movel(posx(list(COMPACT_TOOL_DOWN)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-                wait(0.5)
-                self.gripper.release()
-                movel(posx(list(COMPACT_TOOL_ABOVE)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-                if not self._sleep_interruptible(0.2): return False
-
-            movel(posx(list(COMPACT_TOOL_WAYPOINT)), vel=VELOCITY, acc=ACC, ref=DR_BASE)
-            if not self._sleep_interruptible(0.2): return False
-
-            self.get_logger().info(f"✅ [TILE] 압착 툴 {action} 완료!")
-            return True
-
-        except Exception as e:
-            if self._stop_soft:
-                return False
-            self.get_logger().error(f"[TILE][COMPACT_TOOL] failed: {e}")
-            return False
-
     # -----------------
     # tick / worker
     # -----------------
@@ -343,17 +267,13 @@ class TileMotionNode(Node):
             ok = self._worker_ok
             err = self._worker_err
 
-            try:
-                self._pub_pressing(0)
-            except Exception:
-                pass
-
             if ok and not self._stop_soft:
                 self._publish_status(f"done:{tok}")
                 self._stopped = False
                 self._checkpoint = None
-                # ✅ 최종 완료 step=7
-                self._set_tile_status(self.STEP_DONE, "압착 완료/전체 종료")
+                # ⚠️ 여기서 /tile/step=7 같은 "전체 완료"를 찍지 않음.
+                # (inspect/compact가 별도 노드이므로 TaskManager가 이어서 수행)
+                self._set_tile_status(self.STEP_IDLE, "배치 완료(done) - 다음 단계 대기")
 
             elif err == "stopped":
                 ck = self._checkpoint_to_string()
@@ -367,6 +287,7 @@ class TileMotionNode(Node):
                 self._publish_status(f"error:{tok}:{err or 'aborted/failed'}")
                 self._stopped = False
                 self._checkpoint = None
+                self._set_tile_status(self.STEP_IDLE, "에러/중단")
 
             self._running = False
             self._worker = None
@@ -412,14 +333,6 @@ class TileMotionNode(Node):
         self._stopped = False
         self._last_token = tok
 
-        self._needs_compaction.clear()
-        self._press_error_mm.clear()
-        self._current_pressing_tile = 0
-        try:
-            self._pub_pressing(0)
-        except Exception:
-            pass
-
         self._start_worker(tok=tok, start_ckpt=None, resume_mode=False)
 
     def _start_worker(self, tok: int, start_ckpt: Optional[Dict[str, Any]], resume_mode: bool):
@@ -456,17 +369,13 @@ class TileMotionNode(Node):
                     self._worker_err = str(e)
 
             finally:
-                try:
-                    self._pub_pressing(0)
-                except Exception:
-                    pass
                 self._worker_done = True
 
         self._worker = threading.Thread(target=_run_worker, daemon=True)
         self._worker.start()
 
     # -----------------
-    # main cycle
+    # main cycle (PLACE ONLY)
     # -----------------
     def _perform_cycle(self, start_ckpt: Optional[Dict[str, Any]], resume_mode: bool) -> bool:
         from DSR_ROBOT2 import (
@@ -611,120 +520,6 @@ class TileMotionNode(Node):
                     pass
                 wait(0.1)
 
-        def smart_twist_compaction(timeout_s=15.0) -> Tuple[bool, float]:
-            from DSR_ROBOT2 import (
-                set_ref_coord, task_compliance_ctrl, set_desired_force,
-                check_force_condition, release_force, release_compliance_ctrl,
-                DR_FC_MOD_REL, DR_AXIS_Z, DR_BASE,
-                get_current_posx, get_current_posj, amovej
-            )
-            self._wait_if_paused()
-            if self._stop_soft:
-                return (False, 0.0)
-
-            set_ref_coord(DR_TOOL)
-            task_compliance_ctrl(stx=[3000, 3000, 20, 200, 200, 200], time=0.0)
-            wait(0.2)
-
-            set_desired_force(fd=[0, 0, 30.0, 0, 0, 0], dir=[0, 0, 1, 0, 0, 0], mod=DR_FC_MOD_REL)
-
-            t0 = time.time()
-            touched = False
-            contact_z = 0.0
-            contact_joint = None
-
-            try:
-                while (time.time() - t0) < float(timeout_s):
-                    self._wait_if_paused()
-                    if self._stop_soft:
-                        return (False, 0.0)
-
-                    if check_force_condition(DR_AXIS_Z, min=0, max=6.0) == -1:
-                        touched = True
-                        contact_pos, _ = get_current_posx(DR_BASE)
-                        contact_z = float(contact_pos[2])
-                        contact_joint = get_current_posj()
-                        break
-                    wait(0.05)
-
-                if not touched or contact_joint is None:
-                    return (False, 0.0)
-
-                # 비비기
-                set_desired_force(fd=[0, 0, 10.0, 0, 0, 0], dir=[0, 0, 1, 0, 0, 0], mod=DR_FC_MOD_REL)
-                press_t0 = time.time()
-                direction_flag = 1
-                last_switch_time = time.time()
-
-                while (time.time() - press_t0) < 3.0:
-                    if self._check_abort():
-                        return (False, 0.0)
-
-                    now = time.time()
-                    if now - last_switch_time > 0.5:
-                        direction_flag *= -1
-                        last_switch_time = now
-
-                    target_joint = list(contact_joint)
-                    target_joint[5] = contact_joint[5] + (10.0 * direction_flag)
-                    amovej(target_joint, vel=80, acc=80)
-                    wait(0.1)
-
-                amovej(contact_joint, vel=40, acc=40)
-                if not self._sleep_interruptible(3.0):
-                    return (False, 0.0)
-
-                final_pos, _ = get_current_posx(DR_BASE)
-                final_z = float(final_pos[2])
-                depth = float(contact_z - final_z)
-                return (True, depth)
-
-            finally:
-                try:
-                    release_force()
-                except Exception:
-                    pass
-                try:
-                    release_compliance_ctrl()
-                except Exception:
-                    pass
-                wait(0.1)
-
-        def probe_single_point(p_safe) -> Optional[float]:
-            from DSR_ROBOT2 import (
-                set_ref_coord, task_compliance_ctrl, set_desired_force,
-                check_force_condition, DR_FC_MOD_REL, DR_AXIS_Z
-            )
-            if not safe_movel(p_safe, vel=VELOCITY, acc=ACC, ref=DR_BASE):
-                return None
-
-            set_ref_coord(DR_TOOL)
-            task_compliance_ctrl(stx=[3000, 3000, 20, 200, 200, 200], time=0.0)
-            wait(0.2)
-            set_desired_force(fd=[0, 0, 30.0, 0, 0, 0], dir=[0, 0, 1, 0, 0, 0], mod=DR_FC_MOD_REL)
-
-            t0 = time.time()
-            z_val = None
-            touched = False
-
-            try:
-                while (time.time() - t0) < 15.0:
-                    if self._check_abort():
-                        return None
-                    if check_force_condition(DR_AXIS_Z, min=0, max=5.0) == -1:
-                        disable_compliance()
-                        wait(0.2)
-                        cur_pos, _ = get_current_posx(DR_BASE)
-                        z_val = float(cur_pos[2])
-                        touched = True
-                        break
-                    wait(0.05)
-            finally:
-                disable_compliance()
-
-            safe_movel(p_safe, vel=VELOCITY, acc=ACC, ref=DR_BASE)
-            return z_val if touched else None
-
         def detach_tile(tile_idx: int) -> bool:
             if self._check_abort():
                 self._worker_err = "stopped"
@@ -788,17 +583,14 @@ class TileMotionNode(Node):
                 ck["tile_i"] = 1
             elif ph0 in ("PLACE", "DETACH"):
                 ck["phase"] = "PICK"
-            elif ph0.startswith("INSPECT"):
-                ck["phase"] = "INSPECT_START"
-            elif ph0.startswith("COMPACT"):
-                ck["phase"] = "COMPACT"
 
         # --------------------------
-        # PREPARE
+        # PREPARE (흡착툴 파지)
         # --------------------------
         if ck["phase"] == "PREPARE":
             self._set_ckpt("PREPARE", int(ck.get("tile_i", 1)))
             self._set_tile_status(self.STEP_IDLE, "JReady 이동 및 도구 파지")
+
             self._set_ckpt("JREADY", int(ck.get("tile_i", 1)))
             if not safe_movej(JReady, vel=VELOCITY, acc=ACC):
                 return False
@@ -834,7 +626,7 @@ class TileMotionNode(Node):
             ck = {"phase": "PICK", "tile_i": next_tile_i}
 
         # --------------------------
-        # TILE LOOP
+        # TILE LOOP (PICK/PLACE)
         # --------------------------
         ph = str(ck.get("phase", "PREPARE"))
         if ph not in ("PICK", "PLACE", "DETACH", "DONE"):
@@ -912,118 +704,16 @@ class TileMotionNode(Node):
                 self._set_ckpt("PICK", tile_i + 1)
 
         # --------------------------
-        # RETURN TOOL -> INSPECT -> COMPACT
+        # RETURN SUCTION TOOL (끝)
         # --------------------------
-        if ph in ("PICK", "PLACE", "DETACH"):
-            ck = {"phase": "RETURN_SUCTION_TOOL", "tile_i": 0}
+        self._set_ckpt("RETURN_SUCTION_TOOL", 0)
+        self._set_tile_status(self.STEP_PLACE, "타일 배치 완료 -> 흡착툴 반납")
+        if not self.return_tool():
+            self._worker_err = "stopped" if self._stop_soft else "return_tool_failed"
+            return False
 
-        if ck["phase"] == "RETURN_SUCTION_TOOL":
-            self._set_ckpt("RETURN_SUCTION_TOOL", 0)
-            if not self.return_tool():
-                self._worker_err = "stopped" if self._stop_soft else "return_tool_failed"
-                return False
-
-            if not safe_movel(posx(TOOL_WAYPOINT), vel=VELOCITY, acc=ACC):
-                return False
-
-            self.gripper.close_fully()
-            ck = {"phase": "INSPECT_START", "tile_i": 1}
-
-        # ✅ INSPECT 진입 시 /tile/step=5
-        if ck["phase"] in ("INSPECT_START", "INSPECT"):
-            self._set_tile_status(self.STEP_INSPECT, "타일 기울기(단차) 전수 검사 중")
-            start_idx = int(ck.get("tile_i", 1))
-
-            for idx in range(start_idx - 1, len(place_targets)):
-                tile_i, center_pos = place_targets[idx]
-                self._set_ckpt("INSPECT", tile_i)
-
-                z_safe = center_pos[2] - 40
-                rx, ry, rz = center_pos[3], center_pos[4], center_pos[5]
-                offset = 30.0
-                pts = [
-                    posx([center_pos[0] + offset, center_pos[1] + offset, z_safe, rx, ry, rz]),
-                    posx([center_pos[0] - offset, center_pos[1] + offset, z_safe, rx, ry, rz]),
-                    posx([center_pos[0] - offset, center_pos[1] - offset, z_safe, rx, ry, rz]),
-                ]
-
-                z_results: List[float] = []
-                for p in pts:
-                    z = probe_single_point(p)
-                    if z is None:
-                        return False
-                    z_results.append(float(z))
-
-                z_diff = float(max(z_results) - min(z_results))
-                is_bad = z_diff >= 1.5
-                self._needs_compaction[tile_i] = is_bad
-                self._press_error_mm[tile_i] = z_diff
-
-                self._pub_press_error([float(tile_i), float(z_diff), 0.0])
-
-            if any(self._needs_compaction.values()):
-                ck = {"phase": "COMPACT_TOOL_GRAB", "tile_i": 1}
-            else:
-                ck = {"phase": "DONE", "tile_i": 0}
-
-        if ck["phase"] == "COMPACT_TOOL_GRAB":
-            self._set_ckpt("COMPACT_TOOL_GRAB", 0)
-            self._set_tile_status(self.STEP_INSPECT, "압착판 파지 중")  # 아직 검사/준비 흐름
-            if not self.handle_compact_tool("GRAB"):
-                self._worker_err = "stopped" if self._stop_soft else "compact_tool_grab_failed"
-                return False
-            ck = {"phase": "COMPACT", "tile_i": 1}
-
-        # ✅ COMPACT 진입 시 /tile/step=6
-        if ck["phase"] == "COMPACT":
-            self._set_tile_status(self.STEP_COMPACT, "불량 타일 스마트 압착 진행")
-            start_idx = int(ck.get("tile_i", 1))
-
-            self._pub_pressing(0)
-
-            for idx in range(start_idx - 1, len(place_targets)):
-                tile_i, place_pos = place_targets[idx]
-
-                if self._needs_compaction.get(tile_i, False):
-                    self._set_ckpt("COMPACT", tile_i)
-                    self._pub_press_tile(tile_i)
-
-                    safe_place = list(place_pos)
-                    safe_place[2] -= 35.0
-                    if not safe_movel(posx(safe_place), vel=VELOCITY, acc=ACC):
-                        return False
-
-                    self._pub_pressing(tile_i)
-
-                    ok_press, depth_mm = smart_twist_compaction(timeout_s=20.0)
-                    if not ok_press:
-                        return False
-
-                    z_diff = float(self._press_error_mm.get(tile_i, 0.0))
-                    self._pub_press_error([float(tile_i), float(z_diff), float(depth_mm)])
-
-                    self._pub_pressing(0)
-
-                    if not safe_movel(posx(safe_place), vel=VELOCITY, acc=ACC):
-                        return False
-
-            ck = {"phase": "COMPACT_TOOL_RETURN", "tile_i": 0}
-
-        if ck["phase"] == "COMPACT_TOOL_RETURN":
-            self._set_ckpt("COMPACT_TOOL_RETURN", 0)
-            self._set_tile_status(self.STEP_COMPACT, "압착판 반납 중")
-            if not self.handle_compact_tool("RETURN"):
-                self._worker_err = "stopped" if self._stop_soft else "compact_tool_return_failed"
-                return False
-            ck = {"phase": "DONE", "tile_i": 0}
-
-        if ck["phase"] == "DONE":
-            self._set_ckpt("DONE", 0)
-            self._pub_pressing(0)
-            # ✅ DONE 진입 시 /tile/step=7 (TaskManager가 FINISHED로 바꿈)
-            self._set_tile_status(self.STEP_DONE, "압착 완료/전체 종료")
-            return True
-
+        self._set_ckpt("DONE", 0)
+        self._set_tile_status(self.STEP_IDLE, "배치 완료(DONE) - inspect/compact는 외부 노드가 수행")
         return True
 
 

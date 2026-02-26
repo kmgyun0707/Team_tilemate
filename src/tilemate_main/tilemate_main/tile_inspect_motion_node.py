@@ -24,10 +24,12 @@ from typing import Any, Dict, Optional, List, Tuple
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, Int32, Float32MultiArray, String
+from std_msgs.msg import Bool, Float32, Float64, Int32, Int32MultiArray, String
 
 import DR_init
 from tilemate_main.robot_config import RobotConfig
+
+import json
 
 # ----------------------------
 # params / thresholds
@@ -36,6 +38,9 @@ VELOCITY = 30
 ACC = 30
 BAD_Z_DIFF_MM = 1.5   # 불량 판정 기준
 PROBE_TIMEOUT_S = 15.0
+
+COMPACT_CLOSE_W = 0.005
+
 
 # ----------------------------
 # positions (place centers)
@@ -50,6 +55,25 @@ PLACE_TILT_BASE07 = [401.19,  22.88, 228.09, 75.0, 178.60, 77.00]
 PLACE_TILT_BASE08 = [468.62,  21.50, 227.98, 75.0, 178.60, 77.00]
 PLACE_TILT_BASE09 = [539.05,  20.33, 227.54, 75.0, 178.60, 77.00]
 
+class _GripperClient:
+    def __init__(self, node: Node):
+        self._node = node
+        self._pub = node.create_publisher(Float64, "/gripper/width_m", 10)
+
+    def set_width(self, width_m: float):
+        msg = Float64()
+        msg.data = float(width_m)
+        self._pub.publish(msg)
+        self._node.get_logger().info(f"[GRIPPER->CMD] width_m={msg.data:.4f}")
+
+    def close_fully(self, settle_s: float = 1.0):
+        """
+        검사(단차 측정) 전에 그리퍼를 완전히 닫아 TCP/툴 상태를 일관화.
+        width=0.0 으로 닫는 방식은 기존 TileMotionNode와 동일.
+        """
+        self._node.get_logger().info("[GRIPPER] close_fully (for inspect)")
+        self.set_width(0.0)
+        time.sleep(float(settle_s))
 
 class TileInspectMotionNode(Node):
     STEP_IDLE = 0
@@ -59,6 +83,7 @@ class TileInspectMotionNode(Node):
         super().__init__("tile_inspect_node", namespace=cfg.robot_id)
         self.cfg = cfg
         self._boot_node = boot_node
+        self.gripper = _GripperClient(self)
 
         # flags
         self._pause = False
@@ -91,8 +116,10 @@ class TileInspectMotionNode(Node):
         self.pub_step   = self.create_publisher(Int32,  "/tile/step", 10)
 
         self.pub_state  = self.create_publisher(String, "/robot/state", 10)
-        self.pub_press      = self.create_publisher(Float32MultiArray, "/robot/press", 10) # 단차 측정값 
-        self.pub_press_tile = self.create_publisher(Int32, "/robot/press_tile", 10) # 단차를 측정 중인 타일번호
+        self.pub_inspect_level      = self.create_publisher(Float32, "/robot/tile_level", 10) # 단차 측정값 
+        self.pub_inspect_tile_idx = self.create_publisher(Int32, "/robot/tile_inspect_no", 10) # 단차를 측정 중인 타일번호
+
+        self.pub_bad_tiles = self.create_publisher(String, "/tile/inspect/bad_tiles", 10)
 
         # subs
         self.create_subscription(Int32, "/tile/inspect/run_once", self._cb_run_once, 10)
@@ -128,14 +155,29 @@ class TileInspectMotionNode(Node):
         self.pub_status.publish(m)
         self.get_logger().info(f"[INSPECT->STATUS] {m.data}")
 
-    def _pub_press_tile(self, tile_i: int):
-        m = Int32(); m.data = int(tile_i)
-        self.pub_press_tile.publish(m)
+    def _pub_press_error(self, z_diff_mm: float):
+        m_z_diff = Float32()
+        m_z_diff.data = float(z_diff_mm)
+        self.pub_inspect_level.publish(m_z_diff)
 
-    def _pub_press_error(self, tile_i: int, z_diff_mm: float):
-        m = Float32MultiArray()
-        m.data = [float(tile_i), float(z_diff_mm), 0.0]
-        self.pub_press.publish(m)
+    def _pub_press_tile_idx(self, tile_i: int):
+        m_tile_i = Int32()
+        m_tile_i.data = int(tile_i)
+        self.pub_inspect_tile_idx.publish(m_tile_i)
+    
+    def _pub_bad_tiles(self):
+        """
+        불량 타일(tile_i)과 단차(z_diff_mm)를 dict 형태로 묶어서 JSON으로 발행.
+        payload 예:
+        {"1": 2.13, "4": 1.72}
+        """
+        bad_map = {str(k): float(self._press_error_mm.get(k, 0.0))
+                for k, v in self._needs_compaction.items() if v}
+
+        msg = String()
+        msg.data = json.dumps(bad_map, ensure_ascii=False)
+        self.pub_bad_tiles.publish(msg)
+
 
     def _wait_if_paused(self):
         if self._pause:
@@ -383,6 +425,24 @@ class TileInspectMotionNode(Node):
         # resume_mode면 안전 진입을 더 넣고 싶으면 여기 추가
         # (현재는 검사만 해서 생략)
 
+        # ✅ 검사 시작 시 그리퍼 완전 닫기 (초기 1회)
+        # - stop/pause 반영
+        if self._check_abort():
+            self._worker_err = "stopped"
+            return False
+
+        try:
+            self.gripper.close_fully(settle_s=1.0)
+        except Exception as e:
+            if self._stop_soft:
+                self._worker_err = "stopped"
+            else:
+                self._worker_err = f"gripper_close_fully_failed:{e}"
+            return False
+
+        # resume_mode면 안전 진입을 더 넣고 싶으면 여기 추가
+        # (현재는 검사만 해서 생략)
+
         self._set_status(self.STEP_INSPECT, "타일 기울기(단차) 전수 검사 중")
 
         start_i = int(ck.get("tile_i", 1))
@@ -391,7 +451,7 @@ class TileInspectMotionNode(Node):
         for idx in range(start_i - 1, len(place_targets)):
             tile_i, center_pos = place_targets[idx]
             self._set_ckpt("INSPECT", tile_i)
-            self._pub_press_tile(tile_i)
+            self._pub_press_tile_idx(tile_i)
 
             z_safe = center_pos[2] - 40.0
             rx, ry, rz = center_pos[3], center_pos[4], center_pos[5]
@@ -415,8 +475,9 @@ class TileInspectMotionNode(Node):
 
             self._needs_compaction[tile_i] = bool(is_bad)
             self._press_error_mm[tile_i] = float(z_diff)
-            self._pub_press_error(tile_i, z_diff)
 
+            self._pub_press_error(z_diff)
+            self.get_logger().info(f"[INSPECT] tile_idx: {tile_i}, z_diff: {z_diff:.3f}")
             # 다음 타일로 넘어가기 전 잠깐
             if not self._sleep_interruptible(0.05):
                 self._worker_err = "stopped"
@@ -425,6 +486,8 @@ class TileInspectMotionNode(Node):
         # 결과는 다른 노드가 활용하도록 status payload로도 힌트 제공 가능(선택)
         bad_tiles = [k for k, v in self._needs_compaction.items() if v]
         self.get_logger().info(f"[INSPECT] bad_tiles={bad_tiles}")
+        
+        self._pub_bad_tiles() # 불량 타일 토픽 발행
 
         return True
 

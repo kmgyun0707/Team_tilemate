@@ -118,7 +118,7 @@ class TileCompactMotionNode(Node):
         self.pub_step   = self.create_publisher(Int32,  "/tile/step", 10)
 
         self.pub_state  = self.create_publisher(String, "/robot/state", 10)
-        self.pub_pressing   = self.create_publisher(Int32, "/robot/pressing", 10) # 압착하고 있는 타일 번호
+        self.pub_pressing   = self.create_publisher(Int32, "/robot/pressing_no", 10) # 압착하고 있는 타일 번호
 
         # subs
         self.create_subscription(Int32, "/tile/compact/run_once", self._cb_run_once, 10)

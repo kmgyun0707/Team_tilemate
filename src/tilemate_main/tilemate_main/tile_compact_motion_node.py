@@ -86,7 +86,7 @@ class TileCompactMotionNode(Node):
     STEP_DONE = 7
 
     def __init__(self, cfg: RobotConfig, boot_node: Node):
-        super().__init__("tile_compact_node", namespace=cfg.robot_id)
+        super().__init__("tile_compact_motion_node", namespace=cfg.robot_id)
         self.cfg = cfg
         self._boot_node = boot_node
 

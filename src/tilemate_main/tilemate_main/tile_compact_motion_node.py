@@ -30,9 +30,11 @@ from typing import Any, Dict, Optional, List, Tuple
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Int32, Float32MultiArray, String, Float64
+import json
 
 import DR_init
 from tilemate_main.robot_config import RobotConfig
+
 
 # ----------------------------
 # params
@@ -91,6 +93,7 @@ class TileCompactMotionNode(Node):
         # flags
         self._pause = False
         self._stop_soft = False
+        self._bad_tiles_ready = False
 
         # run token
         self._pending_token: Optional[int] = None
@@ -127,7 +130,7 @@ class TileCompactMotionNode(Node):
         self.create_subscription(Bool,  "/task/stop_soft",        self._cb_stop_soft, 10)
 
         # ✅ inspect 결과 구독 (/robot/press): [tile_i, z_diff, depth]
-        self.create_subscription(Float32MultiArray, "/robot/press", self._cb_press, 10)
+        self.create_subscription(String, "/tile/inspect/bad_tiles", self._cb_bad_tiles_json, 10)
 
         self.gripper = _GripperClient(self)
 
@@ -160,18 +163,11 @@ class TileCompactMotionNode(Node):
         self.pub_status.publish(m)
         self.get_logger().info(f"[COMPACT->STATUS] {m.data}")
 
-    def _pub_press_tile(self, tile_i: int):
-        m = Int32(); m.data = int(tile_i)
-        self.pub_press_tile.publish(m)
 
     def _pub_pressing(self, tile_i: int):
         m = Int32(); m.data = int(tile_i)
         self.pub_pressing.publish(m)
 
-    def _pub_press_update(self, tile_i: int, z_diff_mm: float, depth_mm: float):
-        m = Float32MultiArray()
-        m.data = [float(tile_i), float(z_diff_mm), float(depth_mm)]
-        self.pub_press.publish(m)
 
     def _wait_if_paused(self):
         if self._pause:
@@ -210,18 +206,41 @@ class TileCompactMotionNode(Node):
     # -----------------
     # callbacks
     # -----------------
-    def _cb_press(self, msg: Float32MultiArray):
-        # 기대 포맷: [tile_i, z_diff_mm, depth_mm]
+    def _cb_bad_tiles_json(self, msg: String):
+        """
+        Inspect가 발행한 JSON String을 받아서
+        - self._press_error_mm[tile_i] = z_diff_mm
+        - self._needs_compaction[tile_i] = True
+        로 갱신한다.
+        예: {"1": 2.13, "4": 1.72}
+        """
         try:
-            if not msg.data or len(msg.data) < 2:
+            s = (msg.data or "").strip()
+            if not s:
                 return
-            tile_i = int(round(float(msg.data[0])))
-            z_diff = float(msg.data[1])
-            if tile_i < 1 or tile_i > 9:
+
+            data = json.loads(s)
+            if not isinstance(data, dict):
                 return
-            self._press_error_mm[tile_i] = z_diff
-            self._needs_compaction[tile_i] = (z_diff >= float(BAD_Z_DIFF_MM))
-        except Exception:
+
+            updated = 0
+            for k, v in data.items():
+                tile_i = int(k)  # JSON key는 "1" 같은 문자열
+                z_diff = float(v)
+
+                if tile_i < 1 or tile_i > 9:
+                    continue
+
+                self._press_error_mm[tile_i] = z_diff
+                self._needs_compaction[tile_i] = True
+                updated += 1
+
+            if updated > 0:
+                self.get_logger().info(f"[COMPACT] bad_tiles_json updated={updated} keys={list(data.keys())}")
+                self._bad_tiles_ready = True
+
+        except Exception as e:
+            self.get_logger().warn(f"[COMPACT] bad_tiles_json parse failed: {e}")
             return
 
     def _cb_run_once(self, msg: Int32):
@@ -357,6 +376,9 @@ class TileCompactMotionNode(Node):
 
         tok = int(self._pending_token)
         self._pending_token = None
+        if not self._bad_tiles_ready:
+            self.get_logger().warn("[COMPACT] bad_tiles not ready yet (/tile/inspect/bad_tiles). skip token.")
+            return
 
         if self._stop_soft:
             self.get_logger().warn("[COMPACT] stop_soft=True -> skip token")
@@ -535,8 +557,6 @@ class TileCompactMotionNode(Node):
                     continue
 
                 self._set_ckpt("COMPACT", tile_i)
-                self._pub_press_tile(tile_i)
-                self._pub_pressing(tile_i)
 
                 safe_place = list(place_pos)
                 safe_place[2] -= 35.0
@@ -544,12 +564,12 @@ class TileCompactMotionNode(Node):
                     return False
 
                 ok, depth_mm = smart_twist_compaction(timeout_s=20.0)
+                self._pub_pressing(tile_i)
                 if not ok:
                     self._worker_err = "stopped" if self._stop_soft else "press_failed"
                     return False
 
                 z_diff = float(self._press_error_mm.get(tile_i, 0.0))
-                self._pub_press_update(tile_i, z_diff, float(depth_mm))
 
                 self._pub_pressing(0)
 

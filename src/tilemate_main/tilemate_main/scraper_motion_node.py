@@ -664,7 +664,7 @@ class ScraperMotionNode(Node):
                     self._worker_err = "stopped"
                     return False
 
-                enable_press_force(fz=-5.0)
+                enable_press_force(fz=-4.0)
 
                 # 도포 3세트
                 start_i = int(ck.get("coat_i", 0))

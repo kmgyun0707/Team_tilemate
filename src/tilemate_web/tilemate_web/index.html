@@ -377,6 +377,7 @@
     let elapsedSeconds = 0;
     let prevCompletedJobs = 0;
     let isStarted = false;
+    let isEstopped = false; // 비상정지 상태 플래그
 
     // 각 타일의 고유 색상 (red/black) 추적 - null이면 기본 상태색 사용
     // 타일 색상이 지정되면 작업진행 상태(노란/초록/파란)와 무관하게 이 색상 유지
@@ -546,6 +547,7 @@
             const overlay = document.getElementById('estop-overlay');
             if (overlay.style.display !== 'flex') {
                 overlay.style.display = 'flex';
+                isEstopped = true; // 충돌 감지 시에도 플래그 ON
                 pauseTimer();
             }
             const resumeBtn = document.getElementById('resume-btn');
@@ -573,6 +575,7 @@
         if (data.design) currentDesign = parseInt(data.design);
 
         if (!isStarted) return;
+        if (isEstopped) return; // 비상정지 중에는 타일 상태 변경 차단
 
         const currentJobs = data.completed_jobs || 0;
 
@@ -863,6 +866,7 @@
             if (!timerInterval) startTimer();
         } else if (cmd === 'stop') {
             pauseTimer();
+            isEstopped = true; // 비상정지 플래그 ON
             // 비상정지 오버레이 표시
             const overlay = document.getElementById('estop-overlay');
             overlay.style.display = 'flex';
@@ -876,6 +880,7 @@
         const info = document.getElementById('collision-info');
         info.style.display = 'none';
         info.innerText = '';
+        isEstopped = false; // 비상정지 플래그 OFF → 타일 상태 업데이트 재개
         startTimer();
     }
     window.resumeRobot = resumeRobot;
@@ -913,6 +918,7 @@
         startTime = null;
         elapsedSeconds = 0;
         isStarted = false;
+        isEstopped = false; // 비상정지 플래그 초기화
         prevCompletedJobs = 0;
         currentDesign = 0;
         document.getElementById('timer').innerText = '00 : 00 : 00';

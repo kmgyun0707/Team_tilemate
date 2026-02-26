@@ -6,7 +6,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
 
-from dsr_msgs2.srv import MoveJoint, GetRobotState, SetRobotControl, SetRobotMode
+from dsr_msgs2.srv import MoveJoint, GetRobotState, SetRobotControl, SetRobotMode, MoveStop
 
 
 class InterruptNode(Node):
@@ -41,11 +41,12 @@ class InterruptNode(Node):
 
         # service clients
         self.cli_move_joint = self.create_client(MoveJoint, "/dsr01/motion/move_joint")
-        self.cli_get_state = self.create_client(GetRobotState, "/dsr01/system/get_robot_state")
-        self.cli_set_ctrl  = self.create_client(SetRobotControl, "/dsr01/system/set_robot_control")
-        self.cli_set_mode  = self.create_client(SetRobotMode,  "/dsr01/system/set_robot_mode")
+        self.cli_move_stop  = self.create_client(MoveStop,  "/dsr01/motion/move_stop")
+        self.cli_get_state  = self.create_client(GetRobotState, "/dsr01/system/get_robot_state")
+        self.cli_set_ctrl   = self.create_client(SetRobotControl, "/dsr01/system/set_robot_control")
+        self.cli_set_mode   = self.create_client(SetRobotMode,  "/dsr01/system/set_robot_mode")
 
-        # JReady (deg) 
+        # JReady (deg)
         self.JREADY = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]
 
         # reset state machine
@@ -55,10 +56,18 @@ class InterruptNode(Node):
         self._pending_tag = ""
         self._reset_next_control = 0
 
-        # timer: 50ms tick
-        self._timer = self.create_timer(0.05, self._tick_reset)
+        # --- STOP state machine (MoveStop FIRST) ---
+        self._stop_state = "IDLE"       # IDLE/CALL_WAIT/RETRY_WAIT
+        self._stop_deadline = 0.0
+        self._stop_future = None
+        self._stop_retry_left = 0
+        self._stop_retry_next_t = 0.0
+        self._stop_stop_mode = 1  # 1=일반 stop (프로젝트에서 쓰던 값)
 
-        self.get_logger().error("### INTERRUPT_NODE: RESET=stop_soft + SetRobotControl + MoveJoint(JREADY) (NO MoveStop) ###")
+        # timer: 50ms tick
+        self._timer = self.create_timer(0.05, self._tick)
+
+        self.get_logger().warn("### INTERRUPT_NODE: STOP=MoveStop FIRST -> then stop_soft latch ###")
         self.get_logger().info("InterruptNode ready: sub /robot/command, /task/reset")
 
     # -----------------------------
@@ -70,6 +79,116 @@ class InterruptNode(Node):
         pub.publish(m)
         self.get_logger().warn(f"[PUB] {tag}={m.data}")
 
+    # -----------------------------
+    # unified tick
+    # -----------------------------
+    def _tick(self):
+        self._tick_stop()
+        self._tick_reset()
+
+    # -----------------------------
+    # STOP state machine tick (MoveStop FIRST)
+    # -----------------------------
+    def _arm_stop_sm(self, stop_mode: int = 1, retries: int = 2, timeout_s: float = 1.5):
+        """
+        stop 명령: MoveStop을 먼저 호출해 컨트롤러 모션을 선점(preempt)하고,
+        그 다음 stop_soft=True로 앱 레벨 재발진을 막는다.
+        """
+        # 이미 stop 진행 중이면 중복 arm은 무시(로그만)
+        if self._stop_state != "IDLE":
+            self.get_logger().warn(f"[INT] stop ignored (stop_sm busy state={self._stop_state})")
+            return
+
+        self._stop_stop_mode = int(stop_mode)
+        self._stop_retry_left = int(retries)
+        self._stop_deadline = time.time() + float(timeout_s)
+        self._stop_future = None
+        self._stop_state = "CALL_WAIT"
+        self.get_logger().warn(f"[INT][STOP] armed stop_mode={self._stop_stop_mode} retries={self._stop_retry_left}")
+
+        # (중요) pause는 풀어주고(stop이 pause gate 때문에 늦어지는 것 방지)
+        self._pub_bool(self.pub_pause, False, "/task/pause")
+
+        # 첫 호출 즉시 발행
+        self._fire_move_stop()
+
+    def _fire_move_stop(self):
+        # service ready 체크 (non-blocking)
+        if not self.cli_move_stop.service_is_ready():
+            self.cli_move_stop.wait_for_service(timeout_sec=0.0)
+            self.get_logger().warn("[INT][STOP] MoveStop service not ready yet")
+            return
+
+        req = MoveStop.Request()
+        req.stop_mode = int(self._stop_stop_mode)
+        self._stop_future = self.cli_move_stop.call_async(req)
+        self.get_logger().warn(f"[INT][STOP] MoveStop request send stop_mode={req.stop_mode}")
+
+    def _tick_stop(self):
+        if self._stop_state == "IDLE":
+            return
+
+        # timeout
+        if time.time() > self._stop_deadline:
+            self.get_logger().error("[INT][STOP] timeout -> still latch stop_soft True")
+            # 서비스콜 실패해도 앱 레벨 stop_soft는 걸어야 함
+            self._pub_bool(self.pub_stop_soft, True, "/task/stop_soft")
+            self._stop_state = "IDLE"
+            self._stop_future = None
+            return
+
+        # retry wait
+        if self._stop_state == "RETRY_WAIT":
+            if time.time() >= self._stop_retry_next_t:
+                self._stop_state = "CALL_WAIT"
+                self._fire_move_stop()
+            return
+
+        # CALL_WAIT: future 결과 확인
+        if self._stop_state == "CALL_WAIT":
+            if self._stop_future is None:
+                # 서비스 준비 안 돼서 못 쐈으면 계속 시도
+                self._fire_move_stop()
+                return
+
+            if not self._stop_future.done():
+                return
+
+            try:
+                res = self._stop_future.result()
+            except Exception as e:
+                self.get_logger().error(f"[INT][STOP] MoveStop future exception: {e}")
+                res = None
+
+            ok = bool(getattr(res, "success", False)) if res is not None else False
+            self.get_logger().warn(f"[INT][STOP] MoveStop success={ok}")
+
+            if ok:
+                # ✅ 컨트롤러 모션 선점 성공 -> stop_soft latch
+                self._pub_bool(self.pub_stop_soft, True, "/task/stop_soft")
+                self._stop_state = "IDLE"
+                self._stop_future = None
+                return
+
+            # 실패면 재시도
+            if self._stop_retry_left > 0:
+                self._stop_retry_left -= 1
+                self._stop_future = None
+                self._stop_state = "RETRY_WAIT"
+                self._stop_retry_next_t = time.time() + 0.08  # 80ms 후 재시도
+                self.get_logger().warn(f"[INT][STOP] retry left={self._stop_retry_left}")
+                return
+
+            # 재시도 끝 -> 그래도 stop_soft는 걸어야 함
+            self.get_logger().error("[INT][STOP] MoveStop failed -> latch stop_soft True anyway")
+            self._pub_bool(self.pub_stop_soft, True, "/task/stop_soft")
+            self._stop_state = "IDLE"
+            self._stop_future = None
+            return
+
+    # -----------------------------
+    # reset state machine tick (기존 그대로)
+    # -----------------------------
     def _arm_reset_sm(self):
         """콜백에서는 '요청'만 세팅. 실제 서비스콜/대기는 타이머에서 처리."""
         if self._reset_state != "IDLE":
@@ -90,7 +209,6 @@ class InterruptNode(Node):
 
     def _reset_fail(self, reason: str):
         self.get_logger().error(f"[INT] reset FAIL: {reason}")
-        # stop_soft는 상황에 따라 유지할 수도 있지만, 여기서는 latch 방지 위해 내림
         self._pub_bool(self.pub_stop_soft, False, "/task/stop_soft")
         self._reset_state = "IDLE"
         self._pending_future = None
@@ -103,9 +221,6 @@ class InterruptNode(Node):
         self._pending_future = None
         self._pending_tag = ""
 
-    # -----------------------------
-    # reset state machine tick
-    # -----------------------------
     def _tick_reset(self):
         if self._reset_state == "IDLE":
             return
@@ -141,7 +256,6 @@ class InterruptNode(Node):
 
                 if not ok:
                     self.get_logger().warn("[GetRobotState] failed")
-                    # 다시 GET_STATE 재시도
                     self._reset_state = "GET_STATE"
                     return
 
@@ -169,13 +283,11 @@ class InterruptNode(Node):
                     self._reset_state = "SET_CTRL"
                     return
 
-                # 그 외 상태면 다시 조회
                 self._reset_state = "GET_STATE"
                 return
 
             if tag == "set_ctrl":
                 self.get_logger().warn(f"[SetRobotControl] success={getattr(res, 'success', None)}")
-                # 컨트롤러 반영 시간
                 time.sleep(0.1)
                 self._reset_state = "GET_STATE"
                 return
@@ -189,13 +301,11 @@ class InterruptNode(Node):
                 self._reset_done()
                 return
 
-            # 알 수 없는 tag면 실패
             self._reset_fail(f"unknown future tag: {tag}")
             return
 
         # 2) pending future가 없으면, state에 따라 새로운 request를 발행
         if self._reset_state == "SET_AUTO":
-            # service ready 체크 (non-blocking)
             if not self.cli_set_mode.service_is_ready():
                 self.cli_set_mode.wait_for_service(timeout_sec=0.0)
                 return
@@ -237,15 +347,14 @@ class InterruptNode(Node):
             self._pending_tag = "movej"
             return
 
-        # 알 수 없는 state면 fail
         self._reset_fail(f"unknown state: {self._reset_state}")
 
     # -----------------------------
     # actions (non-reset)
     # -----------------------------
     def _do_stop(self):
-        # MoveStop은 호출하지 않음
-        self._pub_bool(self.pub_stop_soft, True, "/task/stop_soft")
+        # ✅ MoveStop FIRST, then stop_soft latch
+        self._arm_stop_sm(stop_mode=1, retries=2, timeout_s=1.5)
 
     def _do_resume_option_b(self):
         self._pub_bool(self.pub_stop_soft, False, "/task/stop_soft (first)")

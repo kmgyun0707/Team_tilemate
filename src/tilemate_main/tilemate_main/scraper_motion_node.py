@@ -343,6 +343,13 @@ class ScraperMotionNode(Node):
                 return False
             try:
                 movej(*args, **kwargs)
+
+                # ✅ MoveStop으로 인해 조기 리턴된 뒤, 다음 모션 보내기 전에 재확인
+                if self._stop_soft:
+                    self.get_logger().warn("[SAFE_MOVEJ] stopped after movej return")
+                    self._worker_err = "stopped"
+                    return False
+
                 return True
             except Exception as e:
                 if self._stop_soft:
@@ -351,12 +358,20 @@ class ScraperMotionNode(Node):
                 self._worker_err = f"movej failed: {e}"
                 return False
 
+
         def safe_movel(*args, **kwargs) -> bool:
             if self._check_abort():
                 self._worker_err = "stopped"
                 return False
             try:
                 movel(*args, **kwargs)
+
+                # ✅ MoveStop으로 인해 조기 리턴된 뒤, 다음 모션 보내기 전에 재확인
+                if self._stop_soft:
+                    self.get_logger().warn("[SAFE_MOVEL] stopped after movel return")
+                    self._worker_err = "stopped"
+                    return False
+
                 return True
             except Exception as e:
                 if self._stop_soft:

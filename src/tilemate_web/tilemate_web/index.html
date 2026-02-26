@@ -551,8 +551,8 @@
                 pauseTimer();
             }
             const resumeBtn = document.getElementById('resume-btn');
-            // 외력 감지시 재개버튼 숨기려면 none 보이려면 ''
-            if (resumeBtn) resumeBtn.style.display = '';
+            // 외력 감지 비상정지 시 재개버튼 숨김
+            if (resumeBtn) resumeBtn.style.display = 'none';
             const info = document.getElementById('collision-info');
             if (data.collision_joint !== undefined && data.collision_torque !== undefined) {
                 info.style.display = 'block';

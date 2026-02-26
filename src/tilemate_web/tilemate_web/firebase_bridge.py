@@ -98,6 +98,7 @@ class FirebaseBridgeNode(Node):
         self.FORCE_THRESHOLD     = 80.0   # TCP 합력 임계값 (N)
         self.FORCE_Z_THRESHOLD   = 20.0   # TCP Fz 임계값 (N)
         self._collision_detected = False  # 중복 stop 방지
+        self._reset_time = 0.0            # 초기화 직후 충돌 감지 무시용 타임스탬프
 
         # throttle 타임스탬프
         self._last_tcp_update   = 0.0
@@ -143,7 +144,7 @@ class FirebaseBridgeNode(Node):
                 })
 
                 # ── TCP 합력 임계값 초과 시 자동 비상정지 ──
-                if not self._collision_detected and force_total > self.FORCE_THRESHOLD:
+                if not self._collision_detected and (time.time() - self._reset_time > 3.0) and force_total > self.FORCE_THRESHOLD:
                     self._collision_detected = True
                     self.get_logger().warn(
                         f"[FORCE DETECTED] TCP 합력={force_total} N "
@@ -161,7 +162,7 @@ class FirebaseBridgeNode(Node):
                     self._last_command = "stop"
 
                 # ── TCP Fz 임계값 초과 시 자동 비상정지 ──
-                elif not self._collision_detected and abs(fz) > self.FORCE_Z_THRESHOLD:
+                elif not self._collision_detected and (time.time() - self._reset_time > 3.0) and abs(fz) > self.FORCE_Z_THRESHOLD:
                     self._collision_detected = True
                     self.get_logger().warn(
                         f"[FORCE_Z DETECTED] TCP Fz={fz} N "
@@ -199,7 +200,7 @@ class FirebaseBridgeNode(Node):
                 self.ref.update({"ext_torque": torque_dict})
 
                 # ── 충돌 감지: 어느 관절이든 임계값 초과 시 자동 비상정지 ──
-                if not self._collision_detected:
+                if not self._collision_detected and (time.time() - self._reset_time > 3.0):
                     for i, v in torque_dict.items():
                         if abs(v) > self.COLLISION_THRESHOLD:
                             self._collision_detected = True
@@ -311,6 +312,7 @@ class FirebaseBridgeNode(Node):
 
                         if action == "reset":
                             self._collision_detected = False  # 충돌 감지 플래그 해제
+                            self._reset_time = time.time()    # reset 타임스탬프 → 1초간 충돌 감지 무시
                             self.ref.set({
                                 "current_step":   0,
                                 "state":          "대기",

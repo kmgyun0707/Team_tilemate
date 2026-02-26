@@ -164,6 +164,10 @@
         <div id="step3" class="step">타일 파지</div>
         <div class="step">→</div>
         <div id="step4" class="step">타일 배치</div>
+        <div class="step">→</div>
+        <div id="step5" class="step">타일 압착 확인</div>
+        <div class="step">→</div>
+        <div id="step6" class="step">타일 압착 중</div>
     </div>
 
     <div class="bottom-section" id="bottom-section" style="position: relative;">
@@ -211,7 +215,7 @@
                 background: rgba(0,0,0,0.4);
                 padding: 8px 20px;
                 border-radius: 8px;
-            ">충돌 원인 제거 후 초기화 버튼을 눌러주세요</div>
+            ">충돌 원인 제거 후초기화 버튼을 눌러주세요</div>
             <button id="resume-btn" onclick="resumeRobot()" style="
                 pointer-events: all;
                 padding: 14px 44px;
@@ -235,7 +239,7 @@
             <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em; flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #9e9e9e; border: 2px solid #757575; border-radius: 4px;"></div>
-                    <span>접착제 도포</span>
+                    <span>도포완료</span>
                 </div>
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #ffc107; border: 2px solid #ff9800; border-radius: 4px;"></div>
@@ -283,6 +287,16 @@
                     gap: 3px;
                 "></div>
             </div>
+        </div>
+    </div>
+
+    <!-- 배치 끝 팝업 -->
+    <div class="popup-overlay" id="finish-popup">
+        <div class="popup-box" style="width: 400px; text-align: center;">
+            <div style="font-size: 3em; margin-bottom: 16px;">🎉</div>
+            <h2 style="color: #1a237e; margin-bottom: 12px;">배치 끝!</h2>
+            <p style="color: #555; font-size: 1.1em; margin-bottom: 24px;">모든 타일 압착이 완료되었습니다.</p>
+            <button class="popup-confirm" onclick="document.getElementById('finish-popup').classList.remove('show')">확인</button>
         </div>
     </div>
 
@@ -382,6 +396,7 @@
     // 각 타일의 고유 색상 (red/black) 추적 - null이면 기본 상태색 사용
     // 타일 색상이 지정되면 작업진행 상태(노란/초록/파란)와 무관하게 이 색상 유지
     const tileColors = new Array(TOTAL_TILES + 1).fill(null); // 1-indexed
+    const tileState  = new Array(TOTAL_TILES + 1).fill('empty'); // 1-indexed
     let currentDesign = 0; // 현재 선택된 디자인 (1/2/3)
 
     // 디자인별 3x3 타일 색상 (1-indexed, R=빨강 B=검정 W=흰색)
@@ -583,67 +598,144 @@
         const workingTileIdx = currentJobs; // 0~8
 
         if (currentStep === 1) {
-            // Step1: 완료/마르는중 타일 제외하고 전부 빈 상태
+            // Step1: 모든 타일 빈 상태 (아무것도 없음)
             for (let i = 1; i <= TOTAL_TILES; i++) {
                 const el = document.getElementById(`tile-${i}`);
-                if (el && !el.classList.contains('finished') && !el.classList.contains('running')) {
+                if (el && tileState[i] !== 'running' && tileState[i] !== 'finished') {
                     el.classList.remove('working', 'coated');
+                    el.style.backgroundColor = '';
+                    el.style.borderColor = '';
+                    el.style.color = '';
                     el.innerText = '';
+                    tileState[i] = 'empty';
                 }
             }
         } else if (currentStep === 2) {
-            // Step2: 9개 전부 한꺼번에 회색(coated)으로 표시
+            // Step2: 9개 전부 회색(coated) + "도포완료"
             for (let i = 1; i <= TOTAL_TILES; i++) {
                 const el = document.getElementById(`tile-${i}`);
-                if (!el || el.classList.contains('finished') || el.classList.contains('running')) continue;
+                if (!el || tileState[i] === 'running' || tileState[i] === 'finished') continue;
                 el.classList.remove('working');
                 el.classList.add('coated');
-                el.innerText = '';
+                el.style.backgroundColor = '';
+                el.style.borderColor = '';
+                el.style.color = '';
+                tileState[i] = 'coated';
             }
         } else if (currentStep === 3) {
-            // Step3: workingTileIdx+1번 타일 (1~9 순서) 노란색 "작업중"
-            const workingTileId = workingTileIdx + 1; // 1~9
+            // Step3: 현재 작업 타일 노란색 "작업중", 나머지 완료/마르는중 유지
+            const workingTileId = workingTileIdx + 1;
             if (workingTileId <= TOTAL_TILES) {
                 const el = document.getElementById(`tile-${workingTileId}`);
-                if (el && !el.classList.contains('finished') && !el.classList.contains('running')) {
+                if (el && tileState[workingTileId] !== 'running' && tileState[workingTileId] !== 'finished') {
                     el.classList.remove('coated');
                     el.classList.add('working');
+                    el.style.backgroundColor = '';
+                    el.style.borderColor = '';
+                    el.style.color = '';
                     el.innerText = '작업중';
+                    tileState[workingTileId] = 'working';
                 }
             }
         }
         // Step4: 별도 처리 없음 (completed_jobs 증가로 처리)
 
-        // ── completed_jobs 증가 처리 (Step4 완료 → 초록색) ───
+        // Step5: 타일 압착 확인
+        if (currentStep === 5) {
+            // Step5 진입 시 타이머 정지 + 마르는중 텍스트 제거
+            for (let i = 1; i <= TOTAL_TILES; i++) {
+                if (activeTimers[i]) { clearInterval(activeTimers[i]); delete activeTimers[i]; }
+                const el = document.getElementById(`tile-${i}`);
+                if (el && tileState[i] === 'running') { el.innerText = ''; tileState[i] = 'coated'; }
+            }
+
+            const pressTile = data.press_tile || 0;
+            const pressVal  = data.press      || 0.0;
+
+            if (pressTile >= 1 && pressTile <= TOTAL_TILES) {
+                const el = document.getElementById(`tile-${pressTile}`);
+                if (el && tileState[pressTile] !== 'pressed') {
+                    const color = getTileColor(currentDesign, pressTile);
+                    const isBlack = color === 0x212121;
+                    el.classList.remove('working', 'coated', 'running', 'finished');
+                    el.style.backgroundColor = isBlack ? '#212121' : '#ffffff';
+                    el.style.borderColor      = isBlack ? '#000000' : '#cccccc';
+                    el.style.display          = 'flex';
+                    el.style.flexDirection    = 'column';
+                    el.style.alignItems       = 'center';
+                    el.style.justifyContent   = 'center';
+                    el.style.textAlign        = 'center';
+                    el.style.whiteSpace       = 'pre-line';
+
+                    if (pressVal === 0) {
+                        el.style.color = isBlack ? '#ffffff' : '#555555';
+                        el.innerText = '압착\n체크중';
+                        tileState[pressTile] = 'checking';
+                    } else if (pressVal >= 1.5) {
+                        el.style.color = isBlack ? '#ffaaaa' : '#c62828';
+                        el.innerText = `압착 필요\n${pressVal.toFixed(3)}`;
+                        tileState[pressTile] = 'checking';
+                        tiles3D[pressTile - 1].material.color.setHex(color !== null ? color : 0xffffff);
+                    } else {
+                        el.style.color = isBlack ? '#aaffaa' : '#2e7d32';
+                        el.innerText = `배치 완료\n${pressVal.toFixed(3)}`;
+                        tileState[pressTile] = 'checking';
+                        tiles3D[pressTile - 1].material.color.setHex(color !== null ? color : 0xffffff);
+                    }
+                }
+            }
+        }
+
+        // Step6: 타일 압착 중 (pressing 받아서 해당 타일 → 압착 완료)
+        if (currentStep === 6) {
+            const pressing = data.pressing || 0;
+            if (pressing >= 1 && pressing <= TOTAL_TILES) {
+                const el = document.getElementById(`tile-${pressing}`);
+                if (el && tileState[pressing] !== 'pressed') {
+                    const color = getTileColor(currentDesign, pressing);
+                    const isBlack = color === 0x212121;
+                    el.classList.remove('working', 'coated', 'running', 'finished');
+                    el.style.backgroundColor = isBlack ? '#212121' : '#ffffff';
+                    el.style.borderColor      = isBlack ? '#000000' : '#cccccc';
+                    el.style.color            = isBlack ? '#aaffaa' : '#2e7d32';
+                    el.style.display          = 'flex';
+                    el.style.flexDirection    = 'column';
+                    el.style.alignItems       = 'center';
+                    el.style.justifyContent   = 'center';
+                    el.style.textAlign        = 'center';
+                    el.innerText = '압착 완료';
+                    tileState[pressing] = 'pressed';
+                    tiles3D[pressing - 1].material.color.setHex(color !== null ? color : 0xffffff);
+
+                    // 9개 모두 완료 시 팝업
+                    const allDone = tileState.slice(1).every(s => s === 'pressed');
+                    if (allDone) {
+                        document.getElementById('finish-popup').classList.add('show');
+                    }
+                }
+            }
+        }
+
+        // ── completed_jobs 증가 처리 (Step4 완료 → 초록 마르는중 타이머, 패턴 색은 Step5에서) ───
         if (currentJobs > prevCompletedJobs) {
             for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
-                // 이미 running/finished인 타일은 중복 실행 방지
-                if (tileState[i] === 'running' || tileState[i] === 'finished') continue;
-                // 완료된 타일에 디자인 색상 적용 (3D)
-                const color = getTileColor(currentDesign, i);
-                if (color !== null) {
-                    tileColors[i] = color;
-                    tiles3D[i - 1].material.color.setHex(color);
-                } else {
-                    tiles3D[i - 1].material.color.setHex(0xffffff);
-                }
-                // 2D: working → running(초록, 마르는중) 으로 전환 후 타이머
+                if (tileState[i] === 'running' || tileState[i] === 'finished' || tileState[i] === 'pressed' || tileState[i] === 'checking') continue;
                 startTileTimer(i, 120);
             }
         }
 
-        prevCompletedJobs = currentJobs; // 항상 최신값으로 동기화
+        prevCompletedJobs = currentJobs;
     });
 
     // -------------------------------------------------------
     // 공정 단계 업데이트
     // -------------------------------------------------------
     function updateProcessStep(stepNumber) {
-        for (let i = 1; i <= 4; i++) {
+        for (let i = 1; i <= 6; i++) {
             const el = document.getElementById('step' + i);
             if (el) el.classList.remove('active');
         }
-        if (stepNumber > 0 && stepNumber <= 4) {
+        if (stepNumber > 0 && stepNumber <= 6) {
             const el = document.getElementById('step' + stepNumber);
             if (el) el.classList.add('active');
         }
@@ -944,6 +1036,7 @@
 
         // 비상정지 오버레이 초기화
         document.getElementById('estop-overlay').style.display = 'none';
+        document.getElementById('finish-popup').classList.remove('show');
         // 충돌 관련 요소 초기화
         const resumeBtn = document.getElementById('resume-btn');
         if (resumeBtn) resumeBtn.style.display = '';
@@ -955,8 +1048,21 @@
         // 3. 2D 타일 UI 초기화
         for (let i = 1; i <= TOTAL_TILES; i++) {
             tileColors[i] = null;
+            tileState[i] = 'empty';
             const el = document.getElementById(`tile-${i}`);
-            if (el) { el.classList.remove('working', 'coated', 'running', 'finished'); el.innerText = ''; }
+            if (el) {
+                el.classList.remove('working', 'coated', 'running', 'finished');
+                el.style.backgroundColor = '';
+                el.style.borderColor = '';
+                el.style.color = '';
+                el.style.display = '';
+                el.style.flexDirection = '';
+                el.style.alignItems = '';
+                el.style.justifyContent = '';
+                el.style.textAlign = '';
+                el.style.whiteSpace = '';
+                el.innerText = '';
+            }
         }
 
         // 4. 3D 타일 초기화
@@ -985,11 +1091,20 @@
     function startTileTimer(id, sec) {
         let left = sec;
         const el = document.getElementById(`tile-${id}`);
-        const mesh = tiles3D[id - 1];
         if (!el || el.classList.contains('finished')) return;
 
-        el.classList.remove('working', 'coated');
+        el.style.backgroundColor = '';
+        el.style.borderColor = '';
+        el.style.color = '';
+        el.style.display = '';
+        el.style.flexDirection = '';
+        el.style.alignItems = '';
+        el.style.justifyContent = '';
+        el.style.textAlign = '';
+        el.style.whiteSpace = '';
+        el.classList.remove('working', 'coated', 'finished');
         el.classList.add('running');
+        tileState[id] = 'running';
 
         activeTimers[id] = setInterval(() => {
             left--;
@@ -1002,6 +1117,7 @@
                 el.innerText = "완료";
                 el.classList.remove('running');
                 el.classList.add('finished');
+                tileState[id] = 'finished';
             }
         }, 1000);
     }

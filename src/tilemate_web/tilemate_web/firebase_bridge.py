@@ -80,6 +80,7 @@ class FirebaseBridgeNode(Node):
         self.create_subscription(Float32MultiArray, "/robot/tcp",                   self._cb_tcp,                   10)
         self.create_subscription(Int32,             "/robot/completed_jobs",         self._cb_completed_jobs,        10)
         self.create_subscription(JointState,        "/dsr01/joint_states",           self._cb_joint_states,          10)
+        self.create_subscription(Int32,             "/robot/pressing",               self._cb_pressing,              10)
 
         self.get_logger().info("Subscribed: /robot/step, /robot/state, /robot/tcp, "
                                "/robot/completed_jobs,"
@@ -94,9 +95,9 @@ class FirebaseBridgeNode(Node):
         self.get_logger().info("Service clients: get_tool_force, get_external_torque")
 
         # ── 충돌 감지 설정 ────────────────────────────────
-        self.COLLISION_THRESHOLD = 80.0   # 관절 외부토크 임계값 (Nm)
-        self.FORCE_THRESHOLD     = 80.0   # TCP 합력 임계값 (N)
-        self.FORCE_Z_THRESHOLD   = 20.0   # TCP Fz 임계값 (N)
+        self.COLLISION_THRESHOLD = 60.0   # 관절 외부토크 임계값 (Nm)
+        self.FORCE_THRESHOLD     = 60.0   # TCP 합력 임계값 (N)
+        self.FORCE_Z_THRESHOLD   = 40.0   # TCP Fz 임계값 (N)
         self._collision_detected = False  # 중복 stop 방지
         self._reset_time = 0.0            # 초기화 직후 충돌 감지 무시용 타임스탬프
 
@@ -324,6 +325,9 @@ class FirebaseBridgeNode(Node):
                                 "speed":          0,
                                 "design":         0,
                                 "design_ab":      "",
+                                "press_tile":     0,
+                                "press":          0.0,
+                                "pressing":       0,
                                 "tool_force":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
                                 "force_z":        0.0,
                                 "ext_torque":     {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0},
@@ -346,6 +350,10 @@ class FirebaseBridgeNode(Node):
     def _cb_completed_jobs(self, msg: Int32):
         self.ref.update({"completed_jobs": msg.data})
         self.get_logger().info(f"[COMPLETED] → Firebase: {msg.data}")
+
+    def _cb_pressing(self, msg: Int32):
+        self.ref.update({"pressing": msg.data})
+        self.get_logger().info(f"[PRESSING] → Firebase: {msg.data}")
         
     # ── 두산 M0609 Jacobian 기반 TCP 선속도 계산 ────────────
     # DH 파라미터 (a, d, alpha) — 단위: m, rad

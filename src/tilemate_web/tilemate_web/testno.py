@@ -1,4 +1,5 @@
 import time
+import random
 import firebase_admin
 from firebase_admin import credentials, db
 import os
@@ -28,79 +29,107 @@ def wait_for_start(cmd_ref):
         time.sleep(0.5)
 
 def run_simulation(status_ref, design):
-    """
-    Step 1, 2를 수행한 뒤 Step 3, 4를 9번 반복하는 시뮬레이션 로직입니다.
-    웹 UI의 시각화 로직에 맞춰 1-2-3-4 사이클을 9회 반복하며 데이터를 업데이트합니다.
-    """
     print(f"[SIM] 시뮬레이션 시작 (총 {TOTAL_TILES}개 타일 작업)")
-    
-    # 로봇 상태 초기화
+
     status_ref.update({
         "completed_jobs": 0,
         "current_step": 0,
         "state": "준비 중",
         "design": design,
-        "joint_speed": 0
+        "joint_speed": 0,
+        "press_tile": 0,
+        "press": 0.0,
+        "pressing": 0,
     })
 
-    # 9개의 타일에 대해 공정 반복
+    # ── Phase 1: 접착제 파지 → 접착제 도포 (1회) ──────────
+    status_ref.update({
+        "current_step": 1,
+        "state": "접착제 파지중",
+        "joint_speed": 1.5
+    })
+    print("[STEP 1] 접착제 파지")
+    time.sleep(STEP_INTERVAL)
+
+    status_ref.update({
+        "current_step": 2,
+        "state": "접착제 도포중",
+        "joint_speed": 4.0
+    })
+    print("[STEP 2] 접착제 도포")
+    time.sleep(STEP_INTERVAL)
+
+    # ── Phase 2: 타일 파지 → 타일 배치 (9회) ──────────────
     for i in range(TOTAL_TILES):
-        current_job_idx = i  # 0 ~ 8
-        work_tile_num = i + 1  # 1 ~ 9 (Step 3, 4가 표시될 타일 번호)
-        glue_tile_num = GLUE_SEQUENCE[i]  # Step 2에서 회색으로 표시될 타일 번호
+        work_tile_num = i + 1
 
-        # --- Step 1 & 2 (접착제 단계) ---
-        # Step 1: 접착제 파지 (UI에는 아무런 타일 변화 없음)
-        status_ref.update({
-            "current_step": 1,
-            "state": f"접착제 파지중 [{work_tile_num}/{TOTAL_TILES}]",
-            "joint_speed": 1.5
-        })
-        print(f"[STEP 1] 타일 {work_tile_num} 공정 - 접착제 도구 준비")
-        time.sleep(STEP_INTERVAL)
-
-        # Step 2: 접착제 도포 (UI에서 지정된 순서대로 회색 '도포중' 표시)
-        status_ref.update({
-            "current_step": 2,
-            "state": f"접착제 도포중 (타일 {glue_tile_num} 위치)",
-            "joint_speed": 4.0
-        })
-        print(f"[STEP 2] 타일 {work_tile_num} 공정 - {glue_tile_num}번 위치 도포")
-        time.sleep(STEP_INTERVAL)
-
-        # --- Step 3 & 4 (타일 단계) ---
-        # Step 3: 타일 파지 (UI에서 해당 타일 번호가 노란색 '작업중' 표시)
         status_ref.update({
             "current_step": 3,
             "state": f"타일 파지중 [{work_tile_num}/{TOTAL_TILES}]",
             "joint_speed": 1.5
         })
-        print(f"[STEP 3] 타일 {work_tile_num} 공정 - 타일 흡착")
+        print(f"[STEP 3] 타일 {work_tile_num} - 타일 파지")
         time.sleep(STEP_INTERVAL)
 
-        # Step 4: 타일 배치 (UI에서 해당 타일 번호가 노란색 유지)
         status_ref.update({
             "current_step": 4,
             "state": f"타일 배치중 [{work_tile_num}/{TOTAL_TILES}]",
             "joint_speed": 2.5
         })
-        print(f"[STEP 4] 타일 {work_tile_num} 공정 - 배치 위치 {work_tile_num}")
+        print(f"[STEP 4] 타일 {work_tile_num} - 타일 배치")
         time.sleep(STEP_INTERVAL)
 
-        # 타일 1개 최종 완료 (Step 4 종료 후 completed_jobs를 올리면 UI에서 초록색 '마르는중'으로 변경됨)
         status_ref.update({
             "completed_jobs": work_tile_num,
-            "state": f"타일 {work_tile_num} 완료",
+            "state": f"타일 {work_tile_num} 배치 완료",
             "joint_speed": 0
         })
-        print(f"[DONE] 타일 {work_tile_num} 작업 완료 (전체 {work_tile_num}/{TOTAL_TILES})")
+        print(f"[DONE] 타일 {work_tile_num} 배치 완료 ({work_tile_num}/{TOTAL_TILES})")
         time.sleep(0.1)
 
-    # 모든 타일 공정 종료
+    # ── Phase 3: 타일 압착 (9회) ───────────────────────────
+    for i in range(TOTAL_TILES):
+        work_tile_num = i + 1
+
+        status_ref.update({
+            "current_step": 5,
+            "state": f"타일 압착중 [{work_tile_num}/{TOTAL_TILES}]",
+            "press_tile": work_tile_num,
+            "press": 0.0,
+            "joint_speed": 1.0
+        })
+        print(f"[STEP 5] 타일 {work_tile_num} - 압착 체크중")
+        time.sleep(STEP_INTERVAL)
+
+        press_val = round(random.uniform(1.6, 3.0), 3) if work_tile_num % 2 == 1 else round(random.uniform(0.1, 1.4), 3)
+        status_ref.update({
+            "press": press_val,
+            "state": f"압착 {'필요' if press_val >= 1.5 else '완료'} [{work_tile_num}/{TOTAL_TILES}]",
+        })
+        print(f"[STEP 5] 타일 {work_tile_num} press={press_val} → {'압착 필요' if press_val >= 1.5 else '배치 완료'}")
+        time.sleep(STEP_INTERVAL)
+
+    # ── Phase 4: 압착 중 (9회) ────────────────────────────
+    for i in range(TOTAL_TILES):
+        work_tile_num = i + 1
+
+        status_ref.update({
+            "current_step": 6,
+            "state": f"압착 중 [{work_tile_num}/{TOTAL_TILES}]",
+            "pressing": work_tile_num,
+            "joint_speed": 0.5
+        })
+        print(f"[STEP 6] 타일 {work_tile_num} - 압착 중 → 배치 완료")
+        time.sleep(STEP_INTERVAL)
+
+    # 전체 완료
     status_ref.update({
         "current_step": 0,
         "state": "모든 타일링 작업 완료",
-        "joint_speed": 0
+        "joint_speed": 0,
+        "press_tile": 0,
+        "press": 0.0,
+        "pressing": 0,
     })
     print("[FINISH] 모든 시뮬레이션 공정이 성공적으로 끝났습니다.")
 

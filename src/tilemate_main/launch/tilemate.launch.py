@@ -12,28 +12,43 @@ def generate_launch_description():
             name="gripper_node",
             output="screen",
         ),
-        # 내부에서 namespace=dsr01로 생성됨
+        # 이하 노드의 로봇 ns는 내부에서 namespace=dsr01로 생성됨
+        # 스크래퍼 파지 및 접착제 도포 노드
         Node(
             package="tilemate_main",
             executable="scraper_motion_node",
             name="scraper_motion_node",
             output="screen",
         ),
-        # tile배치 노드
+        # 타일 배치 노드
         Node(
             package="tilemate_main",
             executable="tile_motion_node",
             name="tile_motion_node",
             output="screen",
         ),
-        # 3) /robot/command -> /task/* 이벤트로 변환(상태/트리거)
+        # 타일 검사 노드
+        Node(
+            package="tilemate_main",
+            executable="tile_inspect_motion_node",
+            name="tile_inspect_motion_node",
+            output="screen",
+        ),
+        # 타일 압착 노드
+        Node(
+            package="tilemate_main",
+            executable="tile_compact_motion_node",
+            name="tile_compact_motion_node",
+            output="screen",
+        ),
+        # 상태 관리 노드
         Node(
             package="tilemate_main",
             executable="task_manager_node",
             name="task_manager_node",
             output="screen",
         ),
-        # 4) /robot/command 중 stop/pause/reset에 대해 MoveStop 호출(하드정지)
+        # 인터럽트 노드 (비상정지 , 복구)
         Node(
             package="tilemate_main",
             executable="interrupt_node",

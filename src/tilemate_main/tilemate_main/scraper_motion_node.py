@@ -183,9 +183,15 @@ class ScraperMotionNode(Node):
         self.get_logger().warn(f"[SCRAPER] stop_soft={self._stop_soft}")
 
     def _cb_resume(self, msg: Bool):
-        if not bool(msg.data):
+        if not bool(msg.data):  
             return
         self.get_logger().warn("[SCRAPER] resume requested (/scraper/resume)")
+
+        # ✅ 재개 요청이면 pause도 같이 해제 (resume implies unpause)
+        if self._pause:
+            self._pause = False
+            self.get_logger().warn("[SCRAPER] auto-unpause on resume")
+
         self._resume_requested = True
 
     # -----------------
@@ -234,6 +240,10 @@ class ScraperMotionNode(Node):
 
         # 2) ✅ resume 요청 처리
         if self._resume_requested:
+            if self._stop_soft:
+                self.get_logger().warn("[SCRAPER] resume pending: stop_soft=True (waiting stop_soft False)")
+                return  # ✅ 플래그 유지
+
             self._resume_requested = False
 
             if self._stop_soft:
@@ -589,6 +599,8 @@ class ScraperMotionNode(Node):
         # =========================
         if ck["phase"] == "MOVE":
             # NOTE: resume로 MOVE에 들어오면 rotate를 다시 수행 -> 자세/회전 상태가 항상 동일해짐
+            self._set_scraper_status(self.STEP_COATING, "도포 위치로 이동중")  # 또는 별도 STEP_MOVE를 추가
+
             if not safe_movel(pre_mid, vel=60, acc=60): return False
             if not self._sleep_interruptible(1.0): return False
             if not safe_movel(mid, vel=60, acc=60): return False

@@ -413,11 +413,11 @@ class TileMotionNode(Node):
 
         # 2) resume 처리
         if self._resume_requested:
-            self._resume_requested = False
-
             if self._stop_soft:
-                self.get_logger().warn("[TILE] resume ignored: stop_soft=True (set stop_soft False first)")
-                return
+                self.get_logger().warn("[TILE] resume pending: stop_soft=True (waiting stop_soft False)")
+                return  # ✅ 플래그 유지
+
+            self._resume_requested = False
 
             if not self._stopped or self._last_token is None or self._checkpoint is None:
                 self.get_logger().warn(

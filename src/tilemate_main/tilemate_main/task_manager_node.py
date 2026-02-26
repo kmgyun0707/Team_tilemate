@@ -35,6 +35,8 @@ class TaskManagerNode(Node):
         self._busy = False
         self._phase = "IDLE"        # IDLE / SCRAPER / TILE
         self._active_token = 0      # 현재 사이클 token
+        self._robot_step_last = None
+        self._tile_started_token = None
 
         # publishers------------------------------------------------------------
         self.pub_scraper = self.create_publisher(Int32, "/scraper/run_once", 10)
@@ -61,9 +63,13 @@ class TaskManagerNode(Node):
     # -----------------
     # publish helpers
     # -----------------
+
     def _set_step(self, step: int):
-        m = Int32()
-        m.data = int(step)
+        step = int(step)
+        if self._robot_step_last == step:
+            return
+        self._robot_step_last = step
+        m = Int32(); m.data = step
         self.pub_step.publish(m)
         self.get_logger().info(f"[TASK] /robot/step={m.data}")
 
@@ -96,6 +102,10 @@ class TaskManagerNode(Node):
 
 
     def _start_tile(self, tok: int):
+        if self._tile_started_token == tok:
+            self.get_logger().warn(f"[TASK] tile already started for token={tok} -> ignore")
+            return
+        self._tile_started_token = tok
         """scraper 완료 후 tile 시작 (동일 token 사용)"""
         self._phase = "TILE"
 
@@ -194,18 +204,20 @@ class TaskManagerNode(Node):
 
     def _cb_scraper_status(self, msg: String):
         state, tok, emsg = self._parse_status(msg.data)
+
         if state is None:
             return
-
-        if self._phase != "SCRAPER":
-            return
+    
         if not self._is_active_token(tok):
             return
 
         if state == "done":
-            self.get_logger().info(f"[TASK] scraper done token={tok} -> start tile")
-            self._phase = "TILE"   # ✅ 강제 정합
-            self._start_tile(tok)
+            # 이미 TILE로 넘어갔으면 중복 방지
+            if self._phase != "TILE":
+                self.get_logger().info(f"[TASK] scraper done token={tok} -> start tile (phase={self._phase})")
+                self._phase = "TILE"
+                self._start_tile(tok)
+            return
 
         elif state == "error":
             self.get_logger().error(f"[TASK] scraper error token={tok}: {emsg}")
@@ -233,19 +245,18 @@ class TaskManagerNode(Node):
     # step callbacks
     # -----------------
     def _cb_scraper_step(self, msg: Int32):
-        """
-        ScraperMotionNode STEP:
-          0 PREPARE, 1 GRIPPING, 2 COATING, 3 FINISH
-        -> Task step:
-          1,2로만 반영 (SCRAPER phase일 때만)
-        """
-        if self._phase != "SCRAPER":
-            return
-
         s = int(msg.data)
-        if s == 1:       # GRIPPING
+
+        # ✅ phase가 잠깐 IDLE로 떨어져도, tile이 아직 시작 안 했으면 scraper step을 반영
+        if self._phase not in ("SCRAPER", "IDLE"):
+            return
+        if self._phase == "IDLE" and self._busy:
+            # busy인데 IDLE이면 상태 꼬임 -> scraper step을 허용
+            pass
+
+        if s == 1:
             self._set_step(self.STEP_GLUE_PICK)
-        elif s == 2:     # COATING
+        elif s == 2:
             self._set_step(self.STEP_GLUE_SPREAD)
         else:
             # 0,3은 굳이 robot/step을 바꾸지 않음

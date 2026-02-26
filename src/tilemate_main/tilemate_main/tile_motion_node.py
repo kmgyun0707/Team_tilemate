@@ -127,10 +127,10 @@ class TileMotionNode(Node):
         self.pub_state  = self.create_publisher(String, "/robot/state", 10)
         self.pub_completed_jobs = self.create_publisher(Int32, "/robot/completed_jobs", 10)
 
-        self.pub_press_tile = self.create_publisher(Int32, "/robot/press_tile", 10)
-        self.pub_pressing   = self.create_publisher(Int32, "/robot/pressing", 10)
-        self.pub_press      = self.create_publisher(Float32MultiArray, "/robot/press", 10)
-
+        self.pub_press      = self.create_publisher(Float32MultiArray, "/robot/press", 10) # 단차 측정값 
+        self.pub_press_tile = self.create_publisher(Int32, "/robot/press_tile", 10) # 단차를 측정 중인 타일번호
+        self.pub_pressing   = self.create_publisher(Int32, "/robot/pressing", 10) # 압착하고 있는 타일 번호
+        
         # subs
         self.create_subscription(Int32, "/tile/run_once", self._cb_run_once, 10)
         self.create_subscription(Bool,  "/tile/resume",   self._cb_resume, 10)

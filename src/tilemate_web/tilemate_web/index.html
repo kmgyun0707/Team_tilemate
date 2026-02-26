@@ -211,7 +211,7 @@
                 background: rgba(0,0,0,0.4);
                 padding: 8px 20px;
                 border-radius: 8px;
-            ">충돌 원인 제거 후 재개버튼이나 초기화 버튼을 눌러주세요</div>
+            ">충돌 원인 제거 후 초기화 버튼을 눌러주세요</div>
             <button id="resume-btn" onclick="resumeRobot()" style="
                 pointer-events: all;
                 padding: 14px 44px;
@@ -235,7 +235,7 @@
             <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em; flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #9e9e9e; border: 2px solid #757575; border-radius: 4px;"></div>
-                    <span>도포완료</span>
+                    <span>접착제 도포</span>
                 </div>
                 <div style="display: flex; align-items: center; gap: 5px;">
                     <div style="width: 20px; height: 20px; background: #ffc107; border: 2px solid #ff9800; border-radius: 4px;"></div>
@@ -617,6 +617,8 @@
         // ── completed_jobs 증가 처리 (Step4 완료 → 초록색) ───
         if (currentJobs > prevCompletedJobs) {
             for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
+                // 이미 running/finished인 타일은 중복 실행 방지
+                if (tileState[i] === 'running' || tileState[i] === 'finished') continue;
                 // 완료된 타일에 디자인 색상 적용 (3D)
                 const color = getTileColor(currentDesign, i);
                 if (color !== null) {
@@ -630,7 +632,7 @@
             }
         }
 
-        prevCompletedJobs = currentJobs;
+        prevCompletedJobs = currentJobs; // 항상 최신값으로 동기화
     });
 
     // -------------------------------------------------------

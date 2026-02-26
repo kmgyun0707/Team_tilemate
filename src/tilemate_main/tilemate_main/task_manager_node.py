@@ -5,7 +5,7 @@ from std_msgs.msg import String, Int32, Bool
 
 class TaskManagerNode(Node):
     """
-    단일 최상단 상태관리/오케스트레이션 노드.#
+    단일 최상단 상태관리/오케스트레이션 노드.
 
     start 흐름:
       scraper/run_once(token)

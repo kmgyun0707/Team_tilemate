@@ -157,7 +157,7 @@ class FirebaseBridgeNode(Node):
                     })
                     msg = String()
                     msg.data = "stop"
-                    self._pub_cmd.publish(msg)
+                    self._publish_reliable(self._pub_cmd, msg, retries=3)
                     self._last_command = "stop"
 
                 # ── TCP Fz 임계값 초과 시 자동 비상정지 ──
@@ -175,7 +175,7 @@ class FirebaseBridgeNode(Node):
                     })
                     msg = String()
                     msg.data = "stop"
-                    self._pub_cmd.publish(msg)
+                    self._publish_reliable(self._pub_cmd, msg, retries=3)
                     self._last_command = "stop"
         except Exception as e:
             self.get_logger().error(f"[FORCE] error: {e}")
@@ -217,7 +217,7 @@ class FirebaseBridgeNode(Node):
                             # /robot/command 토픽에도 즉시 publish
                             msg = String()
                             msg.data = "stop"
-                            self._pub_cmd.publish(msg)
+                            self._publish_reliable(self._pub_cmd, msg, retries=3)
                             self._last_command = "stop"
                             break
 
@@ -226,11 +226,9 @@ class FirebaseBridgeNode(Node):
             self.get_logger().error(f"[EXT_TORQUE] error: {e}")
 
     # ── 중요 명령 재시도 publish ───────────────────────────
-    def _publish_reliable(self, publisher, msg, retries=3, interval=0.05):
+    def _publish_reliable(self, publisher, msg, retries=1, interval=0.05):
         """
-        중요 명령을 retries회 반복 publish해서 씹힘 방지.
-        subscriber가 아직 연결 안 됐거나 타이밍 문제를 커버.
-        interval: 각 publish 사이 간격 (초)
+        명령을 1회 publish.
         """
         for i in range(retries):
             publisher.publish(msg)
@@ -255,8 +253,11 @@ class FirebaseBridgeNode(Node):
                     if action in ("start", "stop", "reset", "resume"):
                         msg = String()
                         msg.data = action
-                        self._publish_reliable(self._pub_cmd, msg)
-                        self.get_logger().info(f"[CMD] Firebase '{action}' → /robot/command publish (x3)")
+                        if action == "stop":
+                            self._publish_reliable(self._pub_cmd, msg, retries=3)
+                        else:
+                            self._publish_reliable(self._pub_cmd, msg)
+                        self.get_logger().info(f"[CMD] Firebase '{action}' → /robot/command publish")
 
                         if action == "start":
                             is_resume = cmd.get("is_resume", False) if isinstance(cmd, dict) else False
@@ -280,7 +281,7 @@ class FirebaseBridgeNode(Node):
                             d_msg = Int32()
                             d_msg.data = design_int
                             self._publish_reliable(self._pub_design, d_msg)
-                            self.get_logger().info(f"[DESIGN] design={design_int} -> /robot/design publish (x3)")
+                            self.get_logger().info(f"[DESIGN] design={design_int} -> /robot/design publish")
                             self.ref.update({"design": design_int})
 
                             if design_int == 1:
@@ -288,14 +289,14 @@ class FirebaseBridgeNode(Node):
                                 ab_msg = String()
                                 ab_msg.data = ZIGZAG_PATTERN
                                 self._publish_reliable(self._pub_design_ab, ab_msg)
-                                self.get_logger().info(f"[DESIGN_AB] design=1 -> /robot/design_ab publish (x3): '{ZIGZAG_PATTERN}'")
+                                self.get_logger().info(f"[DESIGN_AB] design=1 -> /robot/design_ab publish: '{ZIGZAG_PATTERN}'")
                                 self.ref.update({"design_ab": ZIGZAG_PATTERN})
                             elif design_int == 2:
                                 STRAIGHT_PATTERN = "B,B,B,A,A,A,B,B,B"
                                 ab_msg = String()
                                 ab_msg.data = STRAIGHT_PATTERN
                                 self._publish_reliable(self._pub_design_ab, ab_msg)
-                                self.get_logger().info(f"[DESIGN_AB] design=2 -> /robot/design_ab publish (x3): '{STRAIGHT_PATTERN}'")
+                                self.get_logger().info(f"[DESIGN_AB] design=2 -> /robot/design_ab publish: '{STRAIGHT_PATTERN}'")
                                 self.ref.update({"design_ab": STRAIGHT_PATTERN})
                             else:
                                 custom_pattern = cmd.get("custom_pattern", None)
@@ -303,7 +304,7 @@ class FirebaseBridgeNode(Node):
                                     ab_msg = String()
                                     ab_msg.data = custom_pattern
                                     self._publish_reliable(self._pub_design_ab, ab_msg)
-                                    self.get_logger().info(f"[DESIGN_AB] design=3 (custom) -> /robot/design_ab publish (x3): '{custom_pattern}'")
+                                    self.get_logger().info(f"[DESIGN_AB] design=3 (custom) -> /robot/design_ab publish: '{custom_pattern}'")
                                     self.ref.update({"design_ab": custom_pattern})
                                 else:
                                     self.get_logger().warn("[DESIGN_AB] design=3 but no custom_pattern in Firebase!")

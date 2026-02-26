@@ -152,7 +152,7 @@
 
     <div class="control-panel">
         <button id="btn-start" onclick="openDesignPopup()">시작</button>
-        <button id="btn-pause" onclick="sendCommand('stop')">비상정지</button>
+        <button id="btn-pause" onclick="sendCommand('stop')">일시정지</button>
         <button id="btn-reset" onclick="resetSystem()">초기화</button>
     </div>
 
@@ -875,7 +875,20 @@
     window.sendCommand = sendCommand;
 
     function resumeRobot() {
-        database.ref('robot_command').set({ action: 'resume', timestamp: Date.now() });
+        // Firebase에서 현재 step과 completed_jobs를 읽어서 함께 전송
+        database.ref('robot_status').once('value', (snapshot) => {
+            const status = snapshot.val() || {};
+            const currentStep    = status.current_step    || 0;
+            const completedJobs  = status.completed_jobs  || 0;
+
+            database.ref('robot_command').set({
+                action:         'resume',
+                current_step:   currentStep,
+                completed_jobs: completedJobs,
+                timestamp:      Date.now()
+            });
+        });
+
         document.getElementById('estop-overlay').style.display = 'none';
         const info = document.getElementById('collision-info');
         info.style.display = 'none';

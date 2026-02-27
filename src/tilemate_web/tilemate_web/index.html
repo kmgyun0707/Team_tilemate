@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>TILING MONITOR - 두산 M0609</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; background-color: #f0f2f5; padding: 20px; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        
+        header { border-bottom: 3px solid #1a237e; margin-bottom: 25px; padding-bottom: 10px; text-align: center; }
+        h1 { font-size: 42px; color: #1a237e; margin: 0; letter-spacing: 2px; }
+        
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 25px; }
+        .info-item { font-size: 1.1em; font-weight: bold; }
+        .info-item span { color: #d32f2f; }
+        
+        #timer-container { grid-column: span 2; text-align: center; font-size: 1.5em; background: #eee; padding: 5px; border-radius: 5px; margin-bottom: 10px; }
+
+        .control-panel { display: flex; gap: 15px; margin-bottom: 30px; }
+        button { flex: 1; padding: 20px; font-size: 1.5em; font-weight: bold; border: none; border-radius: 10px; cursor: pointer; transition: 0.3s; }
+        #btn-start { background-color: #e8f5e9; color: #2e7d32; border: 2px solid #2e7d32; }
+        #btn-pause { background-color: #fff3e0; color: #ef6c00; border: 2px solid #ef6c00; }
+        #btn-reset { background-color: #ffebee; color: #c62828; border: 2px solid #c62828; }
+
+        .process-flow { display: flex; justify-content: space-between; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 25px; }
+        .step { font-weight: bold; color: #999; font-size: 1.1em; padding: 5px 15px; border-radius: 20px; }
+        .step.active { background-color: #ff0000; color: #ffffff !important; box-shadow: 0 0 10px rgba(255,0,0,0.5); }
+
+        .bottom-section { display: flex; gap: 20px; align-items: stretch; }
+        
+        /* 3x3 그리드 */
+        .tile-grid-wrapper {
+            flex: 1.5;
+            display: flex;
+            flex-direction: column;
+        }
+        .tile-grid { 
+            flex: 1;
+            display: grid; 
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px; 
+            background: #e9ecef; 
+            padding: 15px; 
+            border-radius: 12px; 
+            border: 1px solid #ccc;
+            align-content: center;
+        }
+        .tile { 
+            aspect-ratio: 1 / 1;
+            background-color: #ffffff; 
+            border: 2px solid #ddd; 
+            border-radius: 6px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-size: 1.05em; 
+            font-weight: bold; 
+            color: #555; 
+            transition: all 0.4s ease; 
+        }
+
+        .tile.working  { background-color: #ffc107; border-color: #ff9800; color: white; }
+        .tile.running  { background-color: #4caf50; border-color: #2e7d32; color: white; }
+        .tile.finished { background-color: #1a237e; border-color: #0d124a; color: white; }
+        
+        #three-container { flex: 1.5; height: 450px; background: #f8f9fa; border-radius: 12px; border: 1px solid #ccc; }
+
+        /* ── 디자인 선택 팝업 ── */
+        .popup-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .popup-overlay.show { display: flex; }
+        .popup-box {
+            background: white;
+            border-radius: 16px;
+            padding: 32px 36px;
+            width: 720px;
+            max-width: 95vw;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.25);
+        }
+        .popup-box h2 { text-align: center; color: #1a237e; margin: 0 0 24px; font-size: 1.5em; }
+        .design-options { display: flex; gap: 18px; justify-content: center; }
+        .design-card {
+            flex: 1; border: 3px solid #ddd; border-radius: 12px;
+            padding: 16px 12px; cursor: pointer; text-align: center;
+            transition: 0.2s; background: #fafafa;
+        }
+        .design-card:hover { border-color: #1a237e; background: #e8eaf6; }
+        .design-card.selected { border-color: #1a237e; background: #e8eaf6; }
+        .design-card p { margin: 10px 0 0; font-weight: bold; font-size: 0.95em; color: #333; }
+        .design-card small { color: #777; font-size: 0.8em; }
+        .preview-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 28px);
+            grid-template-rows: repeat(3, 28px);
+            gap: 3px;
+            margin: 0 auto 8px;
+            width: fit-content;
+        }
+        .preview-cell {
+            width: 28px; height: 28px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        .pc-white { background: #ffffff; border-color: #ccc; }
+        .pc-black { background: #212121; border-color: #000; }
+        .pc-deco  { background: #ffffff; border-color: #ccc; }
+        .popup-confirm {
+            display: block; margin: 24px auto 0;
+            padding: 14px 48px; font-size: 1.2em; font-weight: bold;
+            background: #1a237e; color: white; border: none;
+            border-radius: 10px; cursor: pointer; flex: unset;
+        }
+        .popup-confirm:hover { background: #283593; }
+        .popup-cancel {
+            display: block; margin: 10px auto 0;
+            padding: 8px 32px; font-size: 0.95em; font-weight: bold;
+            background: transparent; color: #999; border: 1px solid #ddd;
+            border-radius: 8px; cursor: pointer; flex: unset;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header><h1>TILING MONITOR</h1></header>
+
+    <div class="info-grid">
+        <div id="timer-container">타일링 시간: <span id="timer">00 : 00 : 00</span></div>
+        <div class="info-item">타일링 진행도: <span id="job-count">0</span> / <span id="total-tiles">9</span></div>
+        <div class="info-item" style="text-align: right;">로봇속도: <span id="robot-speed">0</span>%</div>
+        <div class="info-item">충돌민감도: <span id="collision-sens">0</span></div>
+        <div class="info-item" style="text-align: right;">상태: <span id="robot-state">대기</span></div>
+    </div>
+
+    <div class="control-panel">
+        <button id="btn-start" onclick="openDesignPopup()">시작</button>
+        <button id="btn-pause" onclick="sendCommand('pause')">비상정지</button>
+        <button id="btn-reset" onclick="resetSystem()">초기화</button>
+    </div>
+
+    <div class="process-flow">
+        <div id="step1" class="step">접착제 파지</div>
+        <div class="step">→</div>
+        <div id="step2" class="step">접착제 도포</div>
+        <div class="step">→</div>
+        <div id="step3" class="step">타일 파지</div>
+        <div class="step">→</div>
+        <div id="step4" class="step">타일 배치</div>
+    </div>
+
+    <div class="bottom-section">
+        <div class="tile-grid-wrapper">
+            <div class="tile-grid" id="tile-map"></div>
+            <div style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; display: flex; gap: 20px; justify-content: center; font-size: 0.95em; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #ffc107; border: 2px solid #ff9800; border-radius: 4px;"></div>
+                    <span>작업중</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #4caf50; border: 2px solid #2e7d32; border-radius: 4px;"></div>
+                    <span>마르는중</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #1a237e; border: 2px solid #0d124a; border-radius: 4px;"></div>
+                    <span>완료</span>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #212121; border: 2px solid #000; border-radius: 4px;"></div>
+                    <span>검정타일</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <div style="width: 20px; height: 20px; background: #ffffff; border: 2px solid #ccc; border-radius: 4px;"></div>
+                    <span>흰색타일</span>
+                </div>
+            </div>
+        </div>
+        <div id="three-container"></div>
+    </div>
+
+    <!-- 디자인 선택 팝업 -->
+    <div class="popup-overlay" id="design-popup">
+        <div class="popup-box">
+            <h2>타일 패턴 선택</h2>
+            <div class="design-options">
+                <!-- 1: 지그재그 RBRB -->
+                <div class="design-card" id="card-1" onclick="selectDesign(1)">
+                    <div class="preview-grid" id="preview-1"></div>
+                    <p>지그재그 ①</p>
+                    <small>RBRB 체커보드</small>
+                </div>
+                <!-- 2: 지그재그 RRRBBB -->
+                <div class="design-card" id="card-2" onclick="selectDesign(2)">
+                    <div class="preview-grid" id="preview-2"></div>
+                    <p>지그재그 ②</p>
+                    <small>RRR / BBB 줄무늬</small>
+                </div>
+                <!-- 3: 데코타일 -->
+                <div class="design-card" id="card-3" onclick="selectDesign(3)">
+                    <div class="preview-grid" id="preview-3"></div>
+                    <p>데코타일</p>
+                    <small>포인트 패턴</small>
+                </div>
+            </div>
+            <button class="popup-confirm" onclick="confirmDesign()">선택 완료</button>
+            <button class="popup-cancel" onclick="closePopup()">취소</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<script>
+    let database;
+    
+    const firebaseConfig = {
+        apiKey: "AIzaSyDPPouqUOm8Ib6blpADMf-VQ_5r9-_IyEk",
+        authDomain: "co1-tiling.firebaseapp.com",
+        databaseURL: "https://co1-tiling-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "co1-tiling",
+        storageBucket: "co1-tiling.firebasestorage.app",
+        messagingSenderId: "925424727446",
+        appId: "1:925424727446:web:85cc99cd5a478fa50759b7"
+    };
+    
+    try {
+        firebase.initializeApp(firebaseConfig);
+        database = firebase.database();
+        console.log('Firebase initialized successfully!');
+    } catch(error) {
+        console.error('Firebase initialization error:', error);
+    }
+
+    const TOTAL_TILES = 9; // 3x3
+    const COLS = 3;
+    const ROWS = 3;
+
+    let timerInterval = null;
+    let startTime = null;
+    let elapsedSeconds = 0;
+    let prevCompletedJobs = 0;
+    let isStarted = false;
+
+    // 각 타일의 고유 색상 (red/black) 추적 - null이면 기본 상태색 사용
+    // 타일 색상이 지정되면 작업진행 상태(노란/초록/파란)와 무관하게 이 색상 유지
+    const tileColors = new Array(TOTAL_TILES + 1).fill(null); // 1-indexed
+    let currentDesign = 0; // 현재 선택된 디자인 (1/2/3)
+
+    // 디자인별 3x3 타일 색상 (1-indexed, R=빨강 B=검정 W=흰색)
+    const DESIGN_COLORS = {
+        1: ['W','B','W','B','W','B','W','B','W'],   // WBWB 체커보드
+        2: ['W','W','W','B','B','B','W','W','W'],   // W줄/B줄/W줄
+        3: ['B','W','B','W','W','W','B','W','B'],   // 데코
+    };
+
+    function getTileColor(design, tileIdx) {
+        // tileIdx: 1~9
+        const pattern = DESIGN_COLORS[design];
+        if (!pattern) return null;
+        const c = pattern[tileIdx - 1];
+        if (c === 'B') return 0x212121;
+        return 0xffffff; // W = 흰색
+    }
+
+    // -------------------------------------------------------
+    // 2D 타일 그리드 생성 (9칸: 3행 3열)
+    // -------------------------------------------------------
+    const tileMap = document.getElementById('tile-map');
+    const activeTimers = {};
+    for (let i = 1; i <= TOTAL_TILES; i++) {
+        const tile = document.createElement('div');
+        tile.classList.add('tile');
+        tile.id = `tile-${i}`;
+        tileMap.appendChild(tile);
+    }
+
+    // -------------------------------------------------------
+    // Three.js 3D 설정
+    // -------------------------------------------------------
+    const container = document.getElementById('three-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf0f2f5);
+
+    const camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(5, 5, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const light = new THREE.DirectionalLight(0xffffff, 0.5);
+    light.position.set(10, 20, 10);
+    scene.add(light);
+
+    // 3D 타일 생성 (3x3)
+    const tiles3D = [];
+    const tileGeom = new THREE.BoxGeometry(0.8, 0.1, 0.8);
+    const tileGap = 0.9;
+    const startX = -((COLS - 1) * tileGap) / 2;
+    const startZ = -((ROWS - 1) * tileGap) / 2;
+
+    for (let i = 0; i < TOTAL_TILES; i++) {
+        const mesh = new THREE.Mesh(
+            tileGeom,
+            new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
+        );
+        const row = Math.floor(i / COLS);
+        const col = i % COLS;
+        mesh.position.set(startX + col * tileGap, 0.05, startZ + row * tileGap);
+        scene.add(mesh);
+        tiles3D.push(mesh);
+    }
+
+    // 벽 위치 계산
+    const tileSize = 0.8;
+    const tileEndX   = startX + (COLS - 1) * tileGap + tileSize / 2;
+    const tileStartX = startX - tileSize / 2;
+    const tileEndZ   = startZ + (ROWS - 1) * tileGap + tileSize / 2;
+    const tileStartZ = startZ - tileSize / 2;
+    const padding = 0.05;
+
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x546e7a, transparent: true, opacity: 0.7 });
+    const wallThickness = 0.2;
+
+    // 뒤쪽 벽
+    const backWall = new THREE.Mesh(
+        new THREE.BoxGeometry(tileEndX - tileStartX, 2.5, wallThickness),
+        wallMat
+    );
+    backWall.position.set(
+        (tileStartX + tileEndX) / 2,
+        1.25,
+        tileStartZ - padding - wallThickness / 2
+    );
+    scene.add(backWall);
+
+    // 왼쪽 벽
+    const sideWall = new THREE.Mesh(
+        new THREE.BoxGeometry(wallThickness, 2.5, tileEndZ - tileStartZ),
+        wallMat
+    );
+    sideWall.position.set(
+        tileStartX - padding - wallThickness / 2,
+        1.25,
+        (tileStartZ + tileEndZ) / 2
+    );
+    scene.add(sideWall);
+
+    // 바닥 플랫폼 (타일 3x3 크기, 벽 높이 1/3)
+    const wallHeight = 2.5;
+    const platformH  = wallHeight / 3;
+    const platformW  = tileEndX - tileStartX;
+    const platformD  = tileEndZ - tileStartZ;
+    const platform = new THREE.Mesh(
+        new THREE.BoxGeometry(platformW, platformH, platformD),
+        new THREE.MeshStandardMaterial({ color: 0xfffff0, transparent: false })
+    );
+    platform.position.set(
+        (tileStartX + tileEndX) / 2,
+        -(platformH / 2),   // 타일(y=0) 바로 아래
+        (tileStartZ + tileEndZ) / 2
+    );
+    scene.add(platform);
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // -------------------------------------------------------
+    // Firebase: robot_status 실시간 수신
+    // -------------------------------------------------------
+    database.ref('robot_status').on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (!data) return;
+
+        document.getElementById('robot-speed').innerText     = data.speed || 0;
+        document.getElementById('robot-state').innerText     = data.state || "대기";
+        document.getElementById('collision-sens').innerText  = data.collision_sensitivity || 0;
+        document.getElementById('job-count').innerText       = data.completed_jobs || 0;
+
+        updateProcessStep(data.current_step || 0);
+
+        // design 번호 업데이트
+        if (data.design) currentDesign = parseInt(data.design);
+
+        if (!isStarted) return;
+
+        const currentJobs = data.completed_jobs || 0;
+
+        if (currentJobs > prevCompletedJobs) {
+            for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
+                // 완료된 타일에 디자인 색상 적용 (3D)
+                const color = getTileColor(currentDesign, i);
+                if (color !== null) {
+                    tileColors[i] = color;
+                    tiles3D[i - 1].material.color.setHex(color);
+                } else {
+                    tiles3D[i - 1].material.color.setHex(0xffffff);
+                }
+                startTileTimer(i, 120);
+            }
+        }
+
+        // 현재 작업 중인 타일 노란색 (2D만)
+        const workingIdx = currentJobs + 1;
+        if (workingIdx <= TOTAL_TILES) {
+            const el = document.getElementById(`tile-${workingIdx}`);
+            if (el && !el.classList.contains('running') && !el.classList.contains('finished')) {
+                el.classList.add('working');
+                el.innerText = '작업중';
+            }
+        }
+
+        prevCompletedJobs = currentJobs;
+    });
+
+    // -------------------------------------------------------
+    // 공정 단계 업데이트
+    // -------------------------------------------------------
+    function updateProcessStep(stepNumber) {
+        for (let i = 1; i <= 4; i++) {
+            const el = document.getElementById('step' + i);
+            if (el) el.classList.remove('active');
+        }
+        if (stepNumber > 0 && stepNumber <= 4) {
+            const el = document.getElementById('step' + stepNumber);
+            if (el) el.classList.add('active');
+        }
+    }
+
+
+    // -------------------------------------------------------
+    // 디자인 선택 팝업
+    // -------------------------------------------------------
+    // 3x3 패턴 정의 (R=빨강, B=검정, W=흰색)
+    const PATTERNS = {
+        1: ['W','B','W', 'B','W','B', 'W','B','W'],   // WBWB 체커보드
+        2: ['W','W','W', 'B','B','B', 'W','W','W'],   // W줄/B줄/W줄
+        3: ['B','W','B', 'W','W','W', 'B','W','B'],   // 데코: 테두리검정+중앙흰색
+    };
+
+    let selectedDesign = null;
+
+    function buildPreviews() {
+        [1, 2, 3].forEach(id => {
+            const grid = document.getElementById('preview-' + id);
+            grid.innerHTML = '';
+            PATTERNS[id].forEach(c => {
+                const cell = document.createElement('div');
+                cell.className = 'preview-cell ' +
+                    (c === 'B' ? 'pc-black' : '');
+                grid.appendChild(cell);
+            });
+        });
+    }
+    buildPreviews();
+
+    function openDesignPopup() {
+        selectedDesign = null;
+        [1,2,3].forEach(i => document.getElementById('card-'+i).classList.remove('selected'));
+        document.getElementById('design-popup').classList.add('show');
+    }
+
+    function closePopup() {
+        document.getElementById('design-popup').classList.remove('show');
+    }
+
+    function selectDesign(n) {
+        selectedDesign = n;
+        [1,2,3].forEach(i => document.getElementById('card-'+i).classList.remove('selected'));
+        document.getElementById('card-'+n).classList.add('selected');
+    }
+
+    function confirmDesign() {
+        if (!selectedDesign) { alert('패턴을 선택해주세요!'); return; }
+        closePopup();
+        // robot_command에 action + design 번호 함께 전송
+        database.ref('robot_command').set({ action: 'start', design: selectedDesign, timestamp: Date.now() });
+        // 기존 start 로직
+        isStarted = true;
+        if (!timerInterval) startTimer();
+        const firstTile = document.getElementById('tile-1');
+        if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
+            firstTile.classList.add('working');
+            firstTile.innerText = '작업중';
+        }
+    }
+    window.openDesignPopup = openDesignPopup;
+    window.closePopup = closePopup;
+    window.selectDesign = selectDesign;
+    window.confirmDesign = confirmDesign;
+
+    // -------------------------------------------------------
+    // 버튼 커맨드
+    // -------------------------------------------------------
+    function sendCommand(cmd) {
+        database.ref('robot_command').set({ action: cmd, timestamp: Date.now() });
+
+        if (cmd === 'start') {
+            isStarted = true;
+            if (!timerInterval) startTimer();
+
+            const firstTile = document.getElementById('tile-1');
+            if (firstTile && !firstTile.classList.contains('running') && !firstTile.classList.contains('finished')) {
+                firstTile.classList.add('working');
+                firstTile.innerText = '작업중';
+            }
+        } else if (cmd === 'pause') {
+            pauseTimer();
+        }
+    }
+    window.sendCommand = sendCommand;
+
+    // -------------------------------------------------------
+    // 타이머
+    // -------------------------------------------------------
+    function startTimer() {
+        if (timerInterval) return;
+        startTime = Date.now() - (elapsedSeconds * 1000);
+        timerInterval = setInterval(() => {
+            elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+            updateTimerDisplay();
+        }, 1000);
+    }
+
+    function updateTimerDisplay() {
+        const h = Math.floor(elapsedSeconds / 3600);
+        const m = Math.floor((elapsedSeconds % 3600) / 60);
+        const s = elapsedSeconds % 60;
+        document.getElementById('timer').innerText =
+            `${String(h).padStart(2,'0')} : ${String(m).padStart(2,'0')} : ${String(s).padStart(2,'0')}`;
+    }
+
+    function pauseTimer() {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    }
+
+    // -------------------------------------------------------
+    // 초기화
+    // -------------------------------------------------------
+    function resetSystem() {
+        // 1. 로컬 상태 먼저 완전 초기화 (Firebase 리스너 발동 전에)
+        pauseTimer();
+        startTime = null;
+        elapsedSeconds = 0;
+        isStarted = false;
+        prevCompletedJobs = 0;
+        currentDesign = 0;
+        document.getElementById('timer').innerText = '00 : 00 : 00';
+
+        // 2. 타이머 전부 정지
+        for (let id in activeTimers) clearInterval(activeTimers[id]);
+        Object.keys(activeTimers).forEach(key => delete activeTimers[key]);
+
+        // 3. 2D 타일 UI 초기화
+        for (let i = 1; i <= TOTAL_TILES; i++) {
+            tileColors[i] = null;
+            const el = document.getElementById(`tile-${i}`);
+            if (el) { el.classList.remove('working', 'running', 'finished'); el.innerText = ''; }
+        }
+
+        // 4. 3D 타일 초기화
+        tiles3D.forEach(mesh => mesh.material.color.setHex(0xaaaaaa));
+        updateProcessStep(0);
+
+        // 5. Firebase 업데이트 (마지막에 - 리스너 발동해도 isStarted=false라 무시됨)
+        database.ref('robot_status').update({
+            completed_jobs: 0,
+            working_tile: 0,
+            current_step: 0,
+            speed: 0,
+            state: '대기',
+            design: 0
+        });
+        database.ref('robot_command').set({ action: 'reset', timestamp: Date.now() });
+
+        console.log('System reset completed!');
+    }
+    window.resetSystem = resetSystem;
+
+    // -------------------------------------------------------
+    // 타일 타이머 (마르는 중 → 완료)
+    // -------------------------------------------------------
+    function startTileTimer(id, sec) {
+        let left = sec;
+        const el = document.getElementById(`tile-${id}`);
+        const mesh = tiles3D[id - 1];
+        if (!el || el.classList.contains('finished')) return;
+
+        el.classList.remove('working');
+        el.classList.add('running');
+
+        activeTimers[id] = setInterval(() => {
+            left--;
+            const m = Math.floor(left / 60);
+            const s = left % 60;
+            el.innerText = `${m}:${s < 10 ? '0' + s : s}`;
+
+            if (left <= 0) {
+                clearInterval(activeTimers[id]);
+                el.innerText = "완료";
+                el.classList.remove('running');
+                el.classList.add('finished');
+            }
+        }, 1000);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+</script>
+</body>
+</html>

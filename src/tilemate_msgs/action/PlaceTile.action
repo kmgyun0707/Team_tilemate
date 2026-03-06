@@ -1,0 +1,16 @@
+# goal
+int8 tile_index
+---
+# result
+bool success
+string message
+---
+#feedback
+float32 fx
+float32 fy
+float32 fz
+float32 tx
+float32 ty
+float32 tz
+float32 progress # 0.0~1.0
+string state  # "approach", "contact", "pressing", "release"

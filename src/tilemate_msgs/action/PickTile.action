@@ -1,0 +1,7 @@
+# goal
+int8 tile_index
+---
+# result
+bool success
+---
+# No Feedback

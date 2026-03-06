@@ -268,15 +268,24 @@ class PlaceTileActionServer(Node):
     # ----------------------------
     # placement preset
     # ----------------------------
-    def get_pre_place_joint(self, placement_index: int):
-        from DSR_ROBOT2 import posj
+    def get_pre_place_pos(self, placement_index: int):
+        from DSR_ROBOT2 import posx
 
-        # TODO:
-        # placement_index별 실제 프리셋으로 바꾸기
-        if placement_index == 0:
-            return posj([-20.954, 15.683, 104.247, 80.223, 107.752, -32.848])
+        placement_positions = {
+            1: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            2: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            3: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            4: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            5: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            6: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            7: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            8: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+            9: [-20.954, 15.683, 104.247, 80.223, 107.752, -32.848],
+        }
+        if placement_index not in placement_positions:
+            raise ValueError(f"Invalid placement_index: {placement_index}")
 
-        return posj([-20.954, 15.683, 104.247, 80.223, 107.752, -32.848])
+        return posx(placement_positions[placement_index])
 
     # ----------------------------
     # Main press logic
@@ -532,10 +541,10 @@ class PlaceTileActionServer(Node):
 
         # 2) placement index별 pre_place
         placement_index = int(goal_handle.request.placement_index)
-        pre_place = self.get_pre_place_joint(placement_index)
+        pre_place = self.get_pre_place_pos(placement_index)
 
         self.publish_feedback(goal_handle, "approach", None, 0.0, 0.15)
-        movej(pre_place, vel=VELOCITY, acc=ACC)
+        movel(pre_place, vel=VELOCITY, acc=ACC)
         mwait()
 
         if self.check_abort(goal_handle):

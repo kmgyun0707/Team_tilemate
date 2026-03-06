@@ -36,7 +36,7 @@ def initialize_robot():
     from DSR_ROBOT2 import (
         set_tool, set_tcp, get_tool, get_tcp,
         ROBOT_MODE_MANUAL, ROBOT_MODE_AUTONOMOUS,
-        get_robot_mode, set_robot_mode
+        get_robot_mode, set_robot_mode,wait
     )
 
     set_robot_mode(ROBOT_MODE_MANUAL)
@@ -44,7 +44,9 @@ def initialize_robot():
     set_tcp(ROBOT_TCP)
     set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
+    ###########
     time.sleep(1.0)
+    wait(1.0)
 
     print("#" * 50)
     print("Initializing robot with the following settings:")
@@ -63,18 +65,22 @@ def initialize_robot():
 # ----------------------------
 def wait_if_paused():
     global PAUSE, STOP_SOFT
+    from DSR_ROBOT2 import wait
     while PAUSE and not STOP_SOFT:
-        time.sleep(0.05)
+        # time.sleep(0.05)
+        wait(0.05)
 
 
 def sleep_interruptible(sec: float, dt: float = 0.05) -> bool:
     global STOP_SOFT
+    from DSR_ROBOT2 import wait
     t0 = time.time()
     while (time.time() - t0) < float(sec):
         if STOP_SOFT:
             return False
         wait_if_paused()
-        time.sleep(float(dt))
+        # time.sleep(float(dt))
+        wait(float(dt))
     return True
 
 
@@ -300,33 +306,96 @@ def perform_task_once():
         movel(posx(target), ref=DR_BASE, vel=30, acc=30)
         mwait()
 
-    # Home
-    JReady = posj([0, 0, 90, 0, 90, 0])
-    movej(JReady, vel=VELOCITY, acc=ACC)
-    mwait()
+    # # Home
+    # JReady = posj([0, 0, 90, 0, 90, 0])
+    # movej(JReady, vel=VELOCITY, acc=ACC)
+    # mwait()
 
-    # 플레이싱 전 위치 (Joint)
+    # # 플레이싱 전 위치 (Joint)
 
-    pre_place = posj([-20.954, 15.683, 104.247, 80.223, 107.752, -32.848])
-    movej(pre_place, vel=VELOCITY, acc=ACC)
-    mwait()
+    # pre_place = posj([-20.954, 15.683, 104.247, 80.223, 107.752, -32.848])
+    # movej(pre_place, vel=VELOCITY, acc=ACC)
+    # mwait()
 
-    move_relative(0.0,0.0,-100.0)
+    # move_relative(0.0,0.0,-100.0)
 
-    # ✅ 압착(스마트 트위스트) 실행
-    print("[SMART_TWIST] start")
-    ok, depth = smart_twist_compaction(timeout_s=20.0, log_dt=0.2)
-    print(f"[SMART_TWIST] ok={ok}, depth={depth:.3f}")
+    # # ✅ 압착(스마트 트위스트) 실행
+    # print("[SMART_TWIST] start")
+    # ok, depth = smart_twist_compaction(timeout_s=20.0, log_dt=0.2)
+    # print(f"[SMART_TWIST] ok={ok}, depth={depth:.3f}")
 
-    wait(1.0)
-    gripper.open_gripper()
-    wait(1.0)
+    # wait(1.0)
+    # gripper.open_gripper()
+    # wait(1.0)
 
-    print("[TASK] movej -> Home")
-    movej(JReady, vel=VELOCITY, acc=ACC)
-    mwait()
+    # print("[TASK] movej -> Home")
+    # movej(JReady, vel=VELOCITY, acc=ACC)
+    # mwait()
 
-    print("[TASK] DONE")
+    # print("[TASK] DONE")
+
+    JReady    = posj([0, 0, 90, 0, 90, 0])
+    pre_place = posj([-25.894,29.976,114.271,67.522,103.095,-54.547])
+
+    tile_wid = 70.0  # 타일 너비 (mm)
+
+    tile_offsets = {
+        1: (-tile_wid,  tile_wid),  # 좌상
+        2: (   0.0,  tile_wid),  # 중상
+        3: ( tile_wid,  tile_wid),  # 우상
+        4: (-tile_wid,    0.0),  # 좌중
+        5: (   0.0,    0.0),  # 중앙
+        6: ( tile_wid,    0.0),  # 우중
+        7: (-tile_wid, -tile_wid),  # 좌하
+        8: (   0.0, -tile_wid),  # 중하
+        9: ( tile_wid, -tile_wid),  # 우하
+        # 1: ( tile_wid,  tile_wid),
+        # 2: ( tile_wid,    0.0),
+        # 3: ( tile_wid, -tile_wid),
+    }
+
+    for tile_num in range(1, 10):
+        print(f"\n{'='*40}")
+        print(f"[TILE {tile_num}/9] 시작")
+        print(f"{'='*40}")
+
+        dx, dz = tile_offsets[tile_num]
+
+        # 1. 홈 이동
+        movej(JReady, vel=VELOCITY, acc=ACC)
+        mwait()
+
+        # wait(1.0)
+        # gripper.close_gripper()
+        # wait(1.0)
+
+        # 2. pre_place 이동 (Joint, 특이점 회피)
+        movej(pre_place, vel=VELOCITY, acc=ACC)
+        mwait()
+
+        # 3. 타일 부착 위치로 이동 (x: 좌우, z: 높이)
+        move_relative(dx, 0.0, dz)
+
+        # 4. 압착 (smart_twist 내부에서 벽 접근 처리)
+        print(f"[TILE {tile_num}] SMART_TWIST 시작")
+        ok, depth = smart_twist_compaction(timeout_s=20.0, log_dt=1.0)
+        print(f"[TILE {tile_num}] ok={ok}, depth={depth:.3f}")
+
+        # 5. 그리퍼 오픈 (타일 릴리즈)
+        # wait(1.0)
+        # gripper.open_gripper()
+        # wait(1.0)
+
+        move_relative(0.0, -30.0, 0.0)
+
+        # 6. 홈 복귀
+        print(f"[TILE {tile_num}] 홈 복귀")
+        movej(JReady, vel=VELOCITY, acc=ACC)
+        mwait()
+
+        print(f"[TILE {tile_num}/9] 완료")
+
+    print("\n[TASK] 전체 9개 타일 완료!")
 
 
 def main(args=None):

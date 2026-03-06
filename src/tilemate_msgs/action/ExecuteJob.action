@@ -1,21 +1,22 @@
-#goal
+# goal
+string token                 # 작업 ID (job 식별자)
+int32[] design_layout        # 타일 배치 타입 배열 (예: [1,1,1,2,2,...])
+bool is_resume               # 작업 재개 여부
+int32 completed_jobs         # 완료된 타일 수
+int32 current_step           # 현재 타일 작업 단계
+int32 current_tile_index     # 현재 작업 중인 타일 번호
 
-int32 design           # 시공 디자인 ID (예: 1=3x3 타일, 2=4x4 타일 등)
-bool is_resume         # 작업 재개 여부 (true: 중단된 작업 이어서 시작)
-int32 completed_jobs   # 이미 완료된 타일 수 (resume 시 복구용)
-int32 current_step     # 현재 타일 내부 작업 단계 (예: pick/place/inspect 등)
-string token           # 작업 식별자(job id). 하나의 시공 작업을 구분하기 위한 ID
 ---
-#result
+# result
+bool success                 # 작업 성공 여부
+string message               # 결과 메시지
 
-bool success
-string message
 ---
 # feedback
-
-int32 overall_step        # 전체 공정 단계 번호 (예: 준비, 접착제 도포, 타일 시공, 검사 등)
-float32 overall_progress  # 전체 공정 진행도 (0.0 ~ 1.0)
-int32 tile_index          # 현재 작업 중인 타일 번호 (1~N)
-int32 tile_step           # 현재 타일 내부 작업 단계 (pick, place, inspect, compact 등)
-float32 tile_progress     # 현재 타일 작업 진행도 (0.0 ~ 1.0)
-string state              # 현재 작업 상태 설명 (예: "준비", "도포중" 등등)
+int32 overall_step           # 전체 공정 단계
+float32 overall_progress     # 전체 공정 진행도 (0~1)
+int32 tile_index             # 현재 타일 번호
+int32 tile_type              # 현재 타일 타입
+int32 tile_step              # 타일 내부 작업 단계
+float32 tile_progress        # 타일 작업 진행도 (0~1)
+string state                 # 현재 상태 설명

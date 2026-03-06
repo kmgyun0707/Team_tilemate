@@ -1,17 +1,21 @@
 # goal
-int8 tile_index
+int32 placement_index # 놓일 타일 위치
+float32 max_press_force # 최대 누를 힘 
+float32 target_press_depth # 목표 압착 깊이
 ---
 # result
 bool success
+float32 press_depth #최종 압착깊이
 string message
+
 ---
-#feedback
+# feedback
+string state # 현재 단계
 float32 fx
 float32 fy
 float32 fz
 float32 tx
 float32 ty
 float32 tz
-float32 press_depth
-float32 progress # 0.0~1.0
-string state  # "approach", "contact", "pressing", "release"
+float32 pressed_depth # 현재까지 눌린 깊이 
+float32 progress

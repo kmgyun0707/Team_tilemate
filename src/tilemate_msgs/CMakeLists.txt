@@ -23,6 +23,7 @@ find_package(std_msgs REQUIRED)
 
 set(action_files
     "action/ExecuteJob.action"
+    "action/PlaceTile.action"
 )
 
 

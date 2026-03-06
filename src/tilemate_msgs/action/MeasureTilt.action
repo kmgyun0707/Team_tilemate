@@ -1,0 +1,11 @@
+# goal
+float32 gap
+float32 slope_roll
+float32 slope_pitch
+float32 slope_yaw
+---
+# result
+bool success
+string message
+---
+# no feedback

@@ -12,5 +12,6 @@ float32 fz
 float32 tx
 float32 ty
 float32 tz
+float32 press_depth
 float32 progress # 0.0~1.0
 string state  # "approach", "contact", "pressing", "release"

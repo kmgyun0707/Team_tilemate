@@ -37,6 +37,7 @@ setup(
             'tile_compact_motion_node = tilemate_main.tile_compact_motion_node:main',
             'interrupt_node = tilemate_main.interrupt_node:main',
             'unit_test_compaction = tilemate_main.unit_test_compaction:main',
+            'pick_tile_action_server = tilemate_main.pick_tile_action_server:main',
             'place_tile_action_server = tilemate_main.place_tile_action_server:main',
         ],
     },

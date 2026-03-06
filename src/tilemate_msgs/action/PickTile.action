@@ -1,5 +1,6 @@
 # goal
-int8 tile_index
+int32 tile_index      # 타일 번호
+int8 tile_type        # 타일 타입
 ---
 # result
 bool success

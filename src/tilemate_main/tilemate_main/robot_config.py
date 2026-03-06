@@ -9,3 +9,9 @@ class RobotConfig:
     tcp: str = "GripperDA_v1"
     vel: float = 40
     acc: float = 60
+    
+@dataclass
+class GripperConfig:
+    GRIPPER_NAME: str = "rg2"
+    TOOLCHARGER_IP: str = "192.168.1.1"
+    TOOLCHARGER_PORT: str = "502"

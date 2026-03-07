@@ -40,6 +40,7 @@ setup(
             'pick_tile_action_server = tilemate_main.pick_tile_action_server:main',
             'place_tile_action_server = tilemate_main.place_tile_action_server:main',
             'new_task_manager = tilemate_main.new_task_manager:main',
+            'depthtest=tilemate_main.depthtest:main',
         ],
     },
 )

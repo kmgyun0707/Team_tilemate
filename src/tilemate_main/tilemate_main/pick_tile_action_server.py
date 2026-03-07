@@ -134,13 +134,12 @@ class PickTileActionServer(Node):
     # pick position preset
     # --------------------------------------------------
 
-    def get_pick_pos(self, tile_type: int):
-
+    def get_pick_pos(self, pos_type: str, tile_type: int):
         from DSR_ROBOT2 import posx
-        
+
         pick_positions = {
-            1: [406.603, -401.761, 190.755, 37.71, -178.489, 126.707],  # 흰색 tile tray
-            2: [314.41, -401.76, 190.755, 37.71, -178.489, 126.707],  # 검은색 tile tray
+            0: [406.603, -327.859, 190.755, 63.012, 179.998, -116.015],  # 흰색 tile tray
+            1: [314.41, -327.859, 190.755, 63.012, 179.998, -116.015],  # 검은색 tile tray
         }
 
         if tile_type not in pick_positions:

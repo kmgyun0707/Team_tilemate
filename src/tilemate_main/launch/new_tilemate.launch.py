@@ -36,8 +36,8 @@ def generate_launch_description():
         # 상태 관리 노드
         Node(
             package="tilemate_main",
-            executable="new_task_manager",
-            name="new_task_manager",
+            executable="task_manager",
+            name="task_manager",
             output="screen",
         ),
     ])

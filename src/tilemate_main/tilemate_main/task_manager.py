@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import time
+import traceback
 
 import rclpy
 from rclpy.node import Node
@@ -91,7 +92,14 @@ class TaskManagerNode(Node):
             f"{robot_ns}/tile/place_press",
             callback_group=self.cb_group,
         )
-
+        #################################
+        self._current_total_tiles = 0
+        self.current_tile_index = -1
+        self.current_tile_type = -1
+        self.current_detail_step = self.TILE_STEP_IDLE
+        self.current_detail_progress = 0.0
+        self.current_state = ""
+        #################################
         self.get_logger().info("\033[94m [1/4] [TASK MANAGER] initialize Done!\033[0m")
         self.get_logger().info(f"pick action  : {robot_ns}/tile/pick")
         self.get_logger().info(f"place action : {robot_ns}/tile/place_press")
@@ -254,36 +262,38 @@ class TaskManagerNode(Node):
 
         return cb
 
-
-    def _place_feedback_cb(self, goal_handle, tile_index):
-
-        def cb(feedback_msg):
-
+    def _make_place_feedback_cb(self, goal_handle, tile_index: int, tile_type: int, total_tiles: int):
+        def _cb(feedback_msg):
             fb = feedback_msg.feedback
 
-            state = getattr(fb, "state", "")
-            progress = float(getattr(fb, "progress", 0.0))
+            sub_state = str(getattr(fb, "state", "place"))
+            sub_progress = float(getattr(fb, "progress", 0.0))
 
-            fx = float(getattr(fb, "fx", 0.0))
-            fy = float(getattr(fb, "fy", 0.0))
-            fz = float(getattr(fb, "fz", 0.0))
-
-            pressed_depth = float(getattr(fb, "pressed_depth", 0.0))
-
-            self.publish_execute_feedback(
-                goal_handle,
-                stage="place",
+            overall_progress = self._calc_overall_progress(
                 tile_index=tile_index,
+                total_tiles=total_tiles,
                 tile_step=self.TILE_STEP_PLACE,
-                detail=state,
-                progress=progress,
-                fx=fx,
-                fy=fy,
-                fz=fz,
-                pressed_depth=pressed_depth,
+                detail_progress=sub_progress,
             )
 
-        return cb
+            # 필요하면 TaskManager 내부 현재 상태도 저장
+            self.current_tile_index = tile_index
+            self.current_tile_type = tile_type
+            self.current_detail_step = self.TILE_STEP_PLACE
+            self.current_detail_progress = sub_progress
+            self.current_state = f"place:{sub_state}"
+
+            self._publish_execute_feedback(
+                goal_handle=goal_handle,
+                overall_step=self.OVERALL_TILE_WORK,
+                overall_progress=overall_progress,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                detail_step=self.TILE_STEP_PLACE,
+                detail_progress=sub_progress,
+                state=f"place:{sub_state}",
+            )
+        return _cb
 
     # --------------------------------------------------
     # main execute
@@ -292,6 +302,7 @@ class TaskManagerNode(Node):
         result = ExecuteJob.Result()
         req = goal_handle.request
 
+        
         self.active_job_goal = goal_handle
         self.active_sub_goal = None
         self.kill_requested = False
@@ -299,6 +310,7 @@ class TaskManagerNode(Node):
         try:
             layout = list(req.design_layout)
             total_tiles = len(layout)
+            self._current_total_tiles = total_tiles
 
             if req.is_resume:
                 start_tile_index = int(req.current_tile_index)
@@ -378,19 +390,26 @@ class TaskManagerNode(Node):
             return result
 
         except Exception as e:
-            self.get_logger().error(f"[TASK] execute failed: {e}")
+            self.get_logger().error(f"[TASK] execute failed: {repr(e)}")
+            self.get_logger().error(traceback.format_exc())
             try:
                 goal_handle.abort()
             except Exception:
                 pass
             result.success = False
-            result.message = f"exception:{e}"
+            result.message = f"exception:{repr(e)}"
             return result
 
         finally:
             self.active_job_goal = None
             self.active_sub_goal = None
             self.kill_requested = False
+            self._current_total_tiles = 0
+            self.current_tile_index = -1
+            self.current_tile_type = -1
+            self.current_detail_step = self.TILE_STEP_IDLE
+            self.current_detail_progress = 0.0
+            self.current_state = ""
 
     # --------------------------------------------------
     # run one tile
@@ -458,9 +477,14 @@ class TaskManagerNode(Node):
         goal.tile_index = tile_index + 1
         goal.tile_type = tile_type
 
-        send_future = self.pick_client.send_goal_async(
+        send_future = self.place_client.send_goal_async(
             goal,
-            feedback_callback=self._pick_feedback_cb(goal_handle, tile_index)
+            feedback_callback=self._make_place_feedback_cb(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                total_tiles=self._current_total_tiles,
+            )
         )
 
         sub_goal_handle = await send_future

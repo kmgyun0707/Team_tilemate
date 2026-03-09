@@ -12,6 +12,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from action_msgs.msg import GoalStatus
 
+from tilemate_msgs.srv import Inspect
 from tilemate_msgs.action import ExecuteJob, PickTile, PlaceTile
 from tilemate_main.robot_config import RobotConfig
 
@@ -76,7 +77,7 @@ class TaskManagerNode(Node):
         self.pub_robot_cmd = self.create_publisher(String, "/robot/command", 10)
 
         # ----------------------------
-        # 하위 액션 클라이언트
+        # 하위 action / service client
         # ----------------------------
         robot_ns = f"/{RobotConfig.robot_id}"
 
@@ -92,20 +93,27 @@ class TaskManagerNode(Node):
             f"{robot_ns}/tile/place_press",
             callback_group=self.cb_group,
         )
-        #################################
+        self.inspect_client = self.create_client(
+            Inspect,
+            f"{robot_ns}/tile/inspect",
+            callback_group=self.cb_group,
+        )
+
+        # ----------------------------
+        # state cache
+        # ----------------------------
         self._current_total_tiles = 0
         self.current_tile_index = -1
         self.current_tile_type = -1
         self.current_detail_step = self.TILE_STEP_IDLE
         self.current_detail_progress = 0.0
         self.current_state = ""
-        #################################
+
         self.get_logger().info("\033[94m [1/4] [TASK MANAGER] initialize Done!\033[0m")
-        self.get_logger().info(f"pick action  : {robot_ns}/tile/pick")
-        self.get_logger().info(f"place action : {robot_ns}/tile/place_press")
-        self.get_logger().info("kill service  : /kill")
-
-
+        self.get_logger().info(f"pick action    : {robot_ns}/tile/pick")
+        self.get_logger().info(f"place action   : {robot_ns}/tile/place_press")
+        self.get_logger().info(f"inspect service: {robot_ns}/tile/inspect")
+        self.get_logger().info("kill service   : /kill")
 
     # --------------------------------------------------
     # helpers
@@ -149,10 +157,7 @@ class TaskManagerNode(Node):
 
         self.kill_requested = True
 
-        # 현재 sub action 취소 요청
         self._cancel_active_subgoal()
-
-        # 하위 로봇 정지 체계도 함께 트리거
         self._publish_stop()
 
         response.success = True
@@ -195,13 +200,16 @@ class TaskManagerNode(Node):
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
+        del goal_handle
         self.get_logger().warn("Cancel request received on /task/run_job")
         self.kill_requested = True
         self._cancel_active_subgoal()
         self._publish_stop()
         return CancelResponse.ACCEPT
-    
 
+    # --------------------------------------------------
+    # feedback helpers
+    # --------------------------------------------------
     def _publish_execute_feedback(
         self,
         goal_handle,
@@ -233,16 +241,18 @@ class TaskManagerNode(Node):
         if total_tiles <= 0:
             return 0.0
 
-        total_units = total_tiles * 2.0
-
-        done_units = float(tile_index) * 2.0
+        # tile당 PICK + PLACE + INSPECT = 3 units
+        total_units = total_tiles * 3.0
+        done_units = float(tile_index) * 3.0
 
         if tile_step == self.TILE_STEP_PICK:
             done_units += 0.0 + float(detail_progress) * 1.0
         elif tile_step == self.TILE_STEP_PLACE:
             done_units += 1.0 + float(detail_progress) * 1.0
+        elif tile_step == self.TILE_STEP_INSPECT:
+            done_units += 2.0 + float(detail_progress) * 1.0
         elif tile_step >= self.TILE_STEP_DONE:
-            done_units += 2.0
+            done_units += 3.0
 
         p = done_units / total_units
         return max(0.0, min(1.0, p))
@@ -250,8 +260,6 @@ class TaskManagerNode(Node):
     def _pick_feedback_cb(self, goal_handle, tile_index: int, tile_type: int, total_tiles: int):
         def _cb(feedback_msg):
             fb = feedback_msg.feedback
-
-            sub_step = int(getattr(fb, "step", 0))
             sub_progress = float(getattr(fb, "progress", 0.0))
             sub_state = str(getattr(fb, "state", "pick"))
 
@@ -283,9 +291,8 @@ class TaskManagerNode(Node):
     def _place_feedback_cb(self, goal_handle, tile_index: int, tile_type: int, total_tiles: int):
         def _cb(feedback_msg):
             fb = feedback_msg.feedback
-
-            sub_state = str(getattr(fb, "state", "place"))
             sub_progress = float(getattr(fb, "progress", 0.0))
+            sub_state = str(getattr(fb, "state", "place"))
 
             overall_progress = self._calc_overall_progress(
                 tile_index=tile_index,
@@ -294,7 +301,6 @@ class TaskManagerNode(Node):
                 detail_progress=sub_progress,
             )
 
-            # 필요하면 TaskManager 내부 현재 상태도 저장
             self.current_tile_index = tile_index
             self.current_tile_type = tile_type
             self.current_detail_step = self.TILE_STEP_PLACE
@@ -313,6 +319,39 @@ class TaskManagerNode(Node):
             )
         return _cb
 
+    def _publish_inspect_feedback(
+        self,
+        goal_handle,
+        tile_index: int,
+        tile_type: int,
+        total_tiles: int,
+        detail_progress: float,
+        state: str,
+    ):
+        overall_progress = self._calc_overall_progress(
+            tile_index=tile_index,
+            total_tiles=total_tiles,
+            tile_step=self.TILE_STEP_INSPECT,
+            detail_progress=detail_progress,
+        )
+
+        self.current_tile_index = tile_index
+        self.current_tile_type = tile_type
+        self.current_detail_step = self.TILE_STEP_INSPECT
+        self.current_detail_progress = detail_progress
+        self.current_state = f"inspect:{state}"
+
+        self._publish_execute_feedback(
+            goal_handle=goal_handle,
+            overall_step=self.OVERALL_TILE_WORK,
+            overall_progress=overall_progress,
+            tile_index=tile_index,
+            tile_type=tile_type,
+            detail_step=self.TILE_STEP_INSPECT,
+            detail_progress=detail_progress,
+            state=f"inspect:{state}",
+        )
+
     # --------------------------------------------------
     # main execute
     # --------------------------------------------------
@@ -320,7 +359,6 @@ class TaskManagerNode(Node):
         result = ExecuteJob.Result()
         req = goal_handle.request
 
-        
         self.active_job_goal = goal_handle
         self.active_sub_goal = None
         self.kill_requested = False
@@ -349,7 +387,6 @@ class TaskManagerNode(Node):
                 return result
 
             for tile_index in range(start_tile_index, total_tiles):
-
                 if self.kill_requested:
                     self.get_logger().warn("[TASK] killed before tile start")
                     goal_handle.abort()
@@ -367,7 +404,7 @@ class TaskManagerNode(Node):
                 tile_type = int(layout[tile_index])
 
                 if req.is_resume and tile_index == start_tile_index:
-                    tile_step_start = start_step
+                    tile_step_start = int(start_step)
                 else:
                     tile_step_start = self.TILE_STEP_IDLE
 
@@ -401,6 +438,17 @@ class TaskManagerNode(Node):
                         result.success = False
                         result.message = msg
                     return result
+
+            self._publish_execute_feedback(
+                goal_handle=goal_handle,
+                overall_step=self.OVERALL_FINISHED,
+                overall_progress=1.0,
+                tile_index=total_tiles - 1,
+                tile_type=int(layout[-1]) if total_tiles > 0 else 0,
+                detail_step=self.TILE_STEP_DONE,
+                detail_progress=1.0,
+                state="done",
+            )
 
             goal_handle.succeed()
             result.success = True
@@ -440,8 +488,6 @@ class TaskManagerNode(Node):
         total_tiles,
         tile_step_start,
     ):
-        del total_tiles
-
         # --------------------------
         # 1 PICK
         # --------------------------
@@ -478,13 +524,47 @@ class TaskManagerNode(Node):
         if goal_handle.is_cancel_requested:
             return False, "canceled_after_place"
 
+        # --------------------------
+        # 3 INSPECT
+        # --------------------------
+        if tile_step_start <= self.TILE_STEP_INSPECT:
+            ok, msg = await self.call_inspect(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                total_tiles=total_tiles,
+            )
+            if not ok:
+                return False, f"inspect_failed:{msg}"
+
+        if self.kill_requested:
+            return False, "killed_after_inspect"
+
+        if goal_handle.is_cancel_requested:
+            return False, "canceled_after_inspect"
+
+        self._publish_execute_feedback(
+            goal_handle=goal_handle,
+            overall_step=self.OVERALL_TILE_WORK,
+            overall_progress=self._calc_overall_progress(
+                tile_index=tile_index,
+                total_tiles=total_tiles,
+                tile_step=self.TILE_STEP_DONE,
+                detail_progress=1.0,
+            ),
+            tile_index=tile_index,
+            tile_type=tile_type,
+            detail_step=self.TILE_STEP_DONE,
+            detail_progress=1.0,
+            state="tile_done",
+        )
+
         return True, "ok"
 
     # --------------------------------------------------
     # pick action
     # --------------------------------------------------
     async def call_pick_tile(self, goal_handle, tile_index, tile_type):
-
         if self.kill_requested:
             return False, "killed_before_pick"
 
@@ -502,7 +582,7 @@ class TaskManagerNode(Node):
                 tile_index=tile_index,
                 tile_type=tile_type,
                 total_tiles=self._current_total_tiles,
-            )
+            ),
         )
 
         sub_goal_handle = await send_future
@@ -538,19 +618,15 @@ class TaskManagerNode(Node):
             return False, "pick_canceled"
 
         result = result_wrap.result
-
         if not result.success:
             return False, result.message
 
         return True, result.message
 
-
-
     # --------------------------------------------------
     # place action
     # --------------------------------------------------
     async def call_place_tile(self, goal_handle, tile_index, tile_type):
-
         if self.kill_requested:
             return False, "killed_before_place"
 
@@ -564,8 +640,14 @@ class TaskManagerNode(Node):
 
         send_future = self.place_client.send_goal_async(
             goal,
-            feedback_callback=self._place_feedback_cb(goal_handle, tile_index, tile_type, total_tiles=self._current_total_tiles)
+            feedback_callback=self._place_feedback_cb(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                total_tiles=self._current_total_tiles,
+            ),
         )
+
         sub_goal_handle = await send_future
         self.active_sub_goal = sub_goal_handle
 
@@ -599,11 +681,78 @@ class TaskManagerNode(Node):
             return False, "place_canceled"
 
         result = result_wrap.result
-
         if not result.success:
             return False, result.message
 
         return True, result.message
+
+    # --------------------------------------------------
+    # inspect service
+    # --------------------------------------------------
+    async def call_inspect(self, goal_handle, tile_index, tile_type, total_tiles):
+        del tile_type
+
+        if self.kill_requested:
+            return False, "killed_before_inspect"
+
+        self._publish_inspect_feedback(
+            goal_handle=goal_handle,
+            tile_index=tile_index,
+            tile_type=tile_type,
+            total_tiles=total_tiles,
+            detail_progress=0.0,
+            state="waiting_inspect_service",
+        )
+
+        if not self.inspect_client.wait_for_service(timeout_sec=2.0):
+            return False, "inspect_service_unavailable"
+
+        if self.kill_requested:
+            return False, "killed_before_inspect_call"
+
+        if goal_handle.is_cancel_requested:
+            return False, "canceled_before_inspect_call"
+
+        req = Inspect.Request()
+
+        self._publish_inspect_feedback(
+            goal_handle=goal_handle,
+            tile_index=tile_index,
+            tile_type=tile_type,
+            total_tiles=total_tiles,
+            detail_progress=0.3,
+            state="calling_inspect_service",
+        )
+
+        future = self.inspect_client.call_async(req)
+        resp = await future
+
+        if resp is None:
+            return False, "inspect_response_none"
+
+        if self.kill_requested:
+            return False, "killed_after_inspect_call"
+
+        if goal_handle.is_cancel_requested:
+            return False, "canceled_after_inspect_call"
+
+        if not resp.success:
+            return False, resp.message
+
+        self.get_logger().info(
+            f"[TASK][INSPECT] tile_index={tile_index}, anomaly_scores={list(resp.anomaly_scores)}"
+        )
+
+        self._publish_inspect_feedback(
+            goal_handle=goal_handle,
+            tile_index=tile_index,
+            tile_type=tile_type,
+            total_tiles=total_tiles,
+            detail_progress=1.0,
+            state="inspect_done",
+        )
+
+        return True, resp.message
 
 
 def main(args=None):

@@ -158,8 +158,8 @@ class PickTileActionServer(Node):
     def get_depth_above_pos(self, tile_type: int):
         from DSR_ROBOT2 import posx
         depth_positions = {
-            0: [406.603, -327.859, 190.755, 63.012, 179.998, -116.015],  # 흰색타일 tray 측정위치
-            1: [314.410, -327.859, 190.755, 63.012, 179.998, -116.015],  # 검은색타일 tray 측정위치
+            1: [406.603, -327.859, 190.755, 63.012, 179.998, -116.015],  # 흰색타일 tray 측정위치
+            2: [314.410, -327.859, 190.755, 63.012, 179.998, -116.015],  # 검은색타일 tray 측정위치
         }
         if tile_type not in depth_positions:
             raise ValueError(f"Unknown tile_type: {tile_type}")
@@ -169,8 +169,8 @@ class PickTileActionServer(Node):
     def get_pick_above_pos(self, tile_type: int):
         from DSR_ROBOT2 import posx
         pick_positions = {
-            0: [409.182, -399.668, 190.755, 128.103, -178.027, 40.091], # 흰색타일 중심점 상단
-            1: [325.568, -406.84, 190.755, 1.445, -179.276, -89.259], # 검은색타일 중심점 상단
+            1: [409.182, -399.668, 190.755, 128.103, -178.027, 40.091], # 흰색타일 중심점 상단
+            2: [325.568, -406.84, 190.755, 1.445, -179.276, -89.259], # 검은색타일 중심점 상단
         }
 
         if tile_type not in pick_positions:

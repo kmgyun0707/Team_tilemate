@@ -20,12 +20,12 @@ def generate_launch_description():
             output="screen",
         ),
         # # 타일 검사 노드
-        # Node(
-        #     package="tilemate_main",
-        #     executable="tile_inspect_motion_node",
-        #     name="tile_inspect_motion_node",
-        #     output="screen",
-        # ),
+        Node(
+            package="tilemate_main",
+            executable="inspect_service",
+            name="inspect_service",
+            output="screen",
+        ),
         # # 타일 압착 노드
         # Node(
         #     package="tilemate_main",

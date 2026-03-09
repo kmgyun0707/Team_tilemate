@@ -23,8 +23,13 @@ set(action_files
   "action/Spread.action"
 )
 
+set(service_files
+  "srv/Inspect.srv"
+)
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${action_files}
+  ${service_files}
   DEPENDENCIES
     builtin_interfaces
     std_msgs

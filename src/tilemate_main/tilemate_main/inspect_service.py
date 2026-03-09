@@ -21,7 +21,7 @@ class InspectService(Node):
             callback_group=self.cb_group,
         )
 
-        self.get_logger().info("[INSPECT] service ready")
+        self.get_logger().info("\033[94m [4/4] [INSPECT] initialize Done!\033[0m")
 
     def inspect_callback(self, request, response):
 

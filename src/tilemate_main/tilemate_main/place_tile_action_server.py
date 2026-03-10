@@ -416,7 +416,7 @@ class PlaceTileActionServer(Node):
             # target_press_depth가 0보다 크면 비교해서 성공/실패를 나눌 수도 있음
             target_depth = float(req.target_press_depth)
             if target_depth > 0.0 and depth < target_depth:
-                return (False, depth, "target_depth_not_reached")
+                return (True, depth, "target_depth_not_reached")
 
             return (True, depth, "press_success")
 
@@ -529,9 +529,6 @@ class PlaceTileActionServer(Node):
             press_depth,
             0.95,
         )
-        wait(0.3)
-        self.gripper.open_gripper()
-        wait(0.5)
 
         # 6) 중간 체크포인트 이동
         move_relative(0.0, -30.0, 0.0)

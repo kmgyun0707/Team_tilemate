@@ -1,0 +1,6 @@
+# no request
+---
+# response
+bool success
+string message
+float32[] anomaly_scores # 이상치 점수

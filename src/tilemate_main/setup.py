@@ -30,6 +30,7 @@ setup(
         'console_scripts': [
             'pick_tile_action_server = tilemate_main.pick_tile_action_server:main',
             'place_tile_action_server = tilemate_main.place_tile_action_server:main',
+            'cowork_action_server = tilemate_main.cowork_action_server:main',
             'inspect_service = tilemate_main.inspect_service:main',
             'task_manager = tilemate_main.task_manager:main',
             'depthtest = tilemate_main.depthtest:main',

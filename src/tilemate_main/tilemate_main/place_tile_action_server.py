@@ -6,30 +6,15 @@ import DR_init
 from rclpy.node import Node
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor
 
 from tilemate_msgs.action import PlaceTile
-
-
-# ----------------------------
-# 로봇 설정 상수
-# ----------------------------
-ROBOT_ID = "dsr01"
-ROBOT_MODEL = "m0609"
-ROBOT_TOOL = "Tool Weight"
-ROBOT_TCP = "GripperDA_v1"
-
-GRIPPER_NAME = "rg2"
-TOOLCHARGER_IP = "192.168.1.1"
-TOOLCHARGER_PORT = "502"
-
-VELOCITY = 40
-ACC = 60
+from tilemate_main.robot_config import RobotConfig, GripperConfig
 
 
 class PlaceTileActionServer(Node):
-    def __init__(self, boot_node: Node):
-        super().__init__("place_tile_action_server", namespace=ROBOT_ID)
+    def __init__(self, robot_cfg: RobotConfig, gripper_cfg: GripperConfig, boot_node: Node):
+        super().__init__("place_tile_action_server", namespace=robot_cfg.robot_id)
 
         self._boot_node = boot_node
         self.cb_group = ReentrantCallbackGroup()
@@ -44,13 +29,15 @@ class PlaceTileActionServer(Node):
             callback_group=self.cb_group,
         )
 
-        # 중요:
-        # onrobot.py 안에 DSR_ROBOT2 top-level import가 있으면 안 됨.
         from tilemate_main.onrobot import RG
-        self.gripper = RG(GRIPPER_NAME, TOOLCHARGER_IP, TOOLCHARGER_PORT)
+        self.gripper = RG(
+            gripper_cfg.GRIPPER_NAME,
+            gripper_cfg.TOOLCHARGER_IP,
+            gripper_cfg.TOOLCHARGER_PORT,
+        )
 
         self.initialize_robot()
-        self.get_logger().info("PlaceTileActionServer ready.")
+        self.get_logger().info("\033[94m [3/4] [PLACE_TILE] initialize Done!\033[0m")
 
     # ----------------------------
     # Action callbacks
@@ -132,8 +119,8 @@ class PlaceTileActionServer(Node):
         self.get_logger().info("[PLACE_TILE] initialize_robot()")
 
         set_robot_mode(ROBOT_MODE_MANUAL)
-        set_tool(ROBOT_TOOL)
-        set_tcp(ROBOT_TCP)
+        set_tool(self.robot_cfg.tool)
+        set_tcp(self.robot_cfg.tcp)
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
         time.sleep(1.0)
@@ -356,52 +343,10 @@ class PlaceTileActionServer(Node):
                 self.get_logger().warn("[CONTACT] failed (timeout/no joint)")
                 return (False, 0.0, "contact_failed")
 
-            # -------------------------
-            # 2) 비비기(조인트6 왕복)
-            # -------------------------
-            set_desired_force(
-                fd=[0, 0, FZ, 0, 0, 0],
-                dir=[0, 0, 1, 0, 0, 0],
-                mod=DR_FC_MOD_REL
-            )
-
-            press_t0 = time.time()
-            direction_flag = 1
-            last_switch = time.time()
-            last_log = 0.0
-
-            self.publish_feedback(goal_handle, "twisting", None, 0.0, 0.60)
-
-            while (time.time() - press_t0) < 2.0:
-                if self.check_abort(goal_handle):
-                    return (False, 0.0, "canceled")
-
-                now = time.time()
-                ft = self.read_ft_guess()
-
-                if (now - last_log) >= float(log_dt):
-                    if ft:
-                        self.get_logger().info(
-                            f"[FT][TWIST ] Fx={ft[0]:7.2f} Fy={ft[1]:7.2f} Fz={ft[2]:7.2f} | "
-                            f"Tx={ft[3]:7.2f} Ty={ft[4]:7.2f} Tz={ft[5]:7.2f}"
-                        )
-                    self.publish_feedback(goal_handle, "twisting", ft, 0.0, 0.75)
-                    last_log = now
-
-                if (time.time() - last_switch) > 0.5:
-                    direction_flag *= -1
-                    last_switch = time.time()
-
-                target_joint = list(contact_joint)
-                target_joint[5] = contact_joint[5] + (10.0 * direction_flag)  # joint6
-
-                # 필요하면 활성화
-                # amovej(target_joint, vel=80, acc=80)
-
-                wait(0.1)
-
-            # 원래 접촉 조인트로 복귀
-            amovej(contact_joint, vel=40, acc=40)
+        
+        
+            # # 원래 접촉 조인트로 복귀
+            # amovej(contact_joint, vel=40, acc=40)
 
             if not self.sleep_interruptible(1.0, goal_handle):
                 return (False, 0.0, "canceled")
@@ -489,7 +434,7 @@ class PlaceTileActionServer(Node):
 
         # 1) Home
         self.publish_feedback(goal_handle, "approach_home", None, 0.0, 0.05)
-        movej(j_ready, vel=VELOCITY, acc=ACC)
+        movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
         mwait()
 
         if self.check_abort(goal_handle):
@@ -497,7 +442,7 @@ class PlaceTileActionServer(Node):
 
         # 2) pre_place 이동
         self.publish_feedback(goal_handle, "approach_pre_place", None, 0.0, 0.15)
-        movej(pre_place, vel=VELOCITY, acc=ACC)
+        movej(pre_place, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
         mwait()
 
         if self.check_abort(goal_handle):
@@ -538,7 +483,7 @@ class PlaceTileActionServer(Node):
 
         # 7) 홈 복귀
         self.publish_feedback(goal_handle, "return_home", None, press_depth, 0.98)
-        movej(j_ready, vel=VELOCITY, acc=ACC)
+        movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
         mwait()
 
         self.publish_feedback(goal_handle, "done", None, press_depth, 1.0)
@@ -550,23 +495,21 @@ class PlaceTileActionServer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    
+    robot_cfg = RobotConfig()
+    gripper_cfg = GripperConfig()
 
-    # ----------------------------
-    # boot node 패턴
-    # ----------------------------
-    boot = rclpy.create_node("dsr_boot_place_tile", namespace=ROBOT_ID)
+    boot = rclpy.create_node("dsr_boot_place_tile", namespace=robot_cfg.robot_id)
 
-    DR_init.__dsr__id = ROBOT_ID
-    DR_init.__dsr__model = ROBOT_MODEL
+    DR_init.__dsr__id = robot_cfg.robot_id
+    DR_init.__dsr__model = robot_cfg.robot_model
     DR_init.__dsr__node = boot
 
-    # 중요:
-    # boot node 설정 후 import 해야 DSR_ROBOT2 내부 g_node가 None이 안 됨
     import DSR_ROBOT2  # noqa: F401
 
-    node = PlaceTileActionServer(boot_node=boot)
+    node = PlaceTileActionServer(robot_cfg, gripper_cfg, boot)
 
-    ex = SingleThreadedExecutor()
+    ex = MultiThreadedExecutor()
     ex.add_node(node)
 
     try:

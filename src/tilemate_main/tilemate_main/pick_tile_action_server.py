@@ -156,10 +156,9 @@ class PickTileActionServer(Node):
     # --------------------------------------------------
 
     def get_depth_above_pos(self, tile_type: int):
-        from DSR_ROBOT2 import posx
         depth_positions = {
-            1: [406.603, -327.859, 190.755, 63.012, 179.998, -116.015],  # 흰색타일 tray 측정위치
-            2: [314.410, -327.859, 190.755, 63.012, 179.998, -116.015],  # 검은색타일 tray 측정위치
+            1: [359.315, -419.616, 210.136, 140.074, 179.203, -127.918],  # 흰색타일 tray 측정위치
+            2: [439.062, -393.011, 210.746, 139.438, 179.149, 51.464],  # 검은색타일 tray 측정위치
         }
         if tile_type not in depth_positions:
             raise ValueError(f"Unknown tile_type: {tile_type}")
@@ -167,12 +166,10 @@ class PickTileActionServer(Node):
         return depth_positions[tile_type]
     
     def get_pick_above_pos(self, tile_type: int):
-        from DSR_ROBOT2 import posx
         pick_positions = {
-            1: [409.182, -399.668, 190.755, 128.103, -178.027, 40.091], # 흰색타일 중심점 상단
-            2: [325.568, -406.84, 190.755, 1.445, -179.276, -89.259], # 검은색타일 중심점 상단
+            1: [436.158, -403.759, 200.0 , 170.548, 178.998, -98.723], # 흰색타일 중심점 상단
+            2: [351.784, -406.931, 200.327, 141.574, 178.994, -127.464], # 검은색타일 중심점 상단
         }
-
         if tile_type not in pick_positions:
             raise ValueError(f"Unknown tile_type: {tile_type}")
 
@@ -199,6 +196,7 @@ class PickTileActionServer(Node):
             get_current_posx,
             posx,
             DR_BASE,
+            DR_TOOL,
         )
 
         if goal_handle.is_cancel_requested:
@@ -222,9 +220,10 @@ class PickTileActionServer(Node):
 
         # 2) depth 측정 위치 이동
         depth_above = self.get_depth_above_pos(tile_type)
+        
         self.publish_feedback(goal_handle, 2, 0.20, "move_depth_above", depth_above[:3])
         self.get_logger().info(f"[PICK_TILE] step2: move to depth_above={depth_above}")
-        movel(depth_above, ref=DR_BASE, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
+        movel(posx(depth_above), ref=DR_BASE, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
         mwait()
 
         if goal_handle.is_cancel_requested:
@@ -248,7 +247,7 @@ class PickTileActionServer(Node):
             min_mm=200,
             max_mm=5000,
             inlier_thresh_mm=80,
-            z_offset_mm=+50.0,
+            z_offset_mm=-43.0,
         )
 
         if base_point is None:
@@ -262,6 +261,7 @@ class PickTileActionServer(Node):
         ]
         self.get_logger().info(f"[PICK_TILE] step4: estimated base_point={base_point.tolist()}")
 
+        time.sleep(3.0)
         # 5) pick 상단 이동
         pick_above = self.get_pick_above_pos(tile_type)
         self.publish_feedback(goal_handle, 5, 0.60, "move_pick_above", pick_above[:3])
@@ -301,6 +301,7 @@ class PickTileActionServer(Node):
 
         self.publish_feedback(goal_handle, 9, 1.0, "done", pick_above[:3])
         self.get_logger().info("[PICK_TILE] finished")
+
         return True, "pick_success"
 
 

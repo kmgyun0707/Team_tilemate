@@ -140,7 +140,7 @@ def move_to_tile_place_position(placement_index: int):
 
     tool_pre_tilt = [369.025, 160.678, 196.749, 44.152, -179.9, -137.748]
 
-    tile_wid = 5.0  # mm
+    tile_wid = 80.0  # mm
 
     base_x = tool_pre_tilt[0]
     base_z = tool_pre_tilt[2]
@@ -164,18 +164,18 @@ def move_to_tile_place_position(placement_index: int):
 
     dx, dz = tile_offsets[placement_index]
 
-    target = [base_x, tool_pre_tilt[1], base_z, tool_pre_tilt[3], tool_pre_tilt[4], tool_pre_tilt[5]]
+    target = tool_pre_tilt.copy()
     target[0] += dx
+    target[1] -=30.0
     target[2] += dz
 
-    target_pos = posx(target)
-
-    print(f"[PLACE_TILE] Index={placement_index} 이동 좌표: {target_pos}")
+    print(f"[PLACE_TILE] Index={placement_index} 이동 좌표: {target}")
 
     # 4. 로봇 이동
     # 안전을 위해 접근 높이(Y)를 조절하는 로직을 추가하는 것이 좋습니다.
-    movel(target_pos, vel=30, acc=30, ref=DR_BASE) 
+    movel(posx(target), vel=30, acc=30, ref=DR_BASE)
     mwait()
+    return dx, dz
 
 def perform_task_once(i:int):
     """Home -> 툴 파지전 -> 툴 파지 -> 뒤로 빼기 -> 배치전 가운데 -> 배치 가운데"""
@@ -206,7 +206,8 @@ def perform_task_once(i:int):
 
     #--------------------------
     tool_pre_tilt = [369.025, 160.678, 196.749, 44.152, -179.9, -137.748]
-    tool_tilt = [369.025, 160.678, 196.749, 91.799, -167.285, -90.1]
+    #tool_tilt = [369.025, 160.678, 196.749, 91.799, -167.285, -90.1]
+    tool_tilt = [369.025, 160.678, 196.749, 91.799, -162.285, -90.1]
     #------------------------------------------------
 
     print("[TASK] 1. movej -> Home")
@@ -239,24 +240,52 @@ def perform_task_once(i:int):
     move_relative(0.0, 0.0, 0.0, dw=-180.0)
 
     print("[TASK] 12. move to place center (cartesian fine pose)")
-    move_to_tile_place_position(i) #1~9
+    dx, dz = move_to_tile_place_position(i) #1~9
 
     print("접근")
     move_relative(0.0, 3.68, -5.0)
     mwait()
 
     print("기울이기")
-    movel(tool_tilt, 30, 30, ref=DR_BASE)
-    mwait()  
+    tool_tilt_target = tool_tilt.copy()
+    tool_tilt_target[0] += dx   # ← 오프셋 적용
+    tool_tilt_target[2] += dz   # ← 오프셋 적용
+    movel(posx(tool_tilt_target), 30, 30, ref=DR_BASE)
+    mwait() 
 
     print("압착")
-    move_relative(0.0, 1.0, 0.0)
+    move_relative(0.0, 10.0, 0.0)
     mwait() 
 
     print("후퇴")
     move_relative(0.0, -23.68, 0.0)
     mwait()
 
+
+    print("[TASK] 15. return Home")
+    movej(JReady, vel=VELOCITY, acc=ACC)
+    mwait()
+
+    print("파지 180도 회전")
+    move_relative(0.0, 0.0, 0.0, dw=180.0)
+
+    print("[TASK] 7. retreat with tool (joint)")
+    move_absoulte(retreat_x[0], retreat_x[1], retreat_x[2]+10.0)
+    move_relative(0.0, 0.0, 0.0, dw=-180.0)
+
+    # 오류
+    # print("[TASK] 5. tool grip position (cartesian fine approach)")
+    # move_absoulte(tool_grip[0], tool_grip[1], tool_grip[2])
+ 
+    print("[TASK] 6. open gripper")
+    gripper.open_gripper()
+    wait(1.5)
+
+    # print("[TASK] 2. tool pick pre-position (joint)")
+    # move_absoulte(tool_pre_grip[0], tool_pre_grip[1], tool_pre_grip[2])
+
+    # print("파지 180도 회전")
+    # move_relative(0.0, 0.0, 0.0, dw=-180.0)
 
     print("[TASK] 15. return Home")
     movej(JReady, vel=VELOCITY, acc=ACC)

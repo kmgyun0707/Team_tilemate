@@ -32,6 +32,7 @@ setup(
             'place_tile_action_server = tilemate_main.place_tile_action_server:main',
             'inspect_service = tilemate_main.inspect_service:main',
             'task_manager = tilemate_main.task_manager:main',
+            'depthtest = tilemate_main.depthtest:main',
         ],
     },
 )

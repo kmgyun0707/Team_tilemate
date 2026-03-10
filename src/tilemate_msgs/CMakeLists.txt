@@ -21,6 +21,7 @@ set(action_files
   "action/PickTile.action"
   "action/PlaceTile.action"
   "action/Spread.action"
+  "action/Cowork.action"
 )
 
 set(service_files

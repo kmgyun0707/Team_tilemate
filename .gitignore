@@ -8,7 +8,9 @@ install/
 __pycache__/
 *.egg-info/
 
-# Firebase Secrets
+# Environment Variables / Secrets
+.env
+*.env
 *.json
 src/cobot1/config/*.json
 

@@ -32,7 +32,7 @@ class InspectService(Node):
 
         self.initialize_robot()
 
-        self.get_logger().info("\033[94m [4/4] [INSPECT] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [5/5] [INSPECT] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # Robot init

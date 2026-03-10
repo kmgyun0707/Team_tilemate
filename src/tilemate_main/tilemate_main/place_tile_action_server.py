@@ -40,7 +40,7 @@ class PlaceTileActionServer(Node):
         )
         self.placement_index = 0
         self.initialize_robot()
-        self.get_logger().info("\033[94m [3/4] [PLACE_TILE] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [4/5] [PLACE_TILE] initialize Done!\033[0m")
 
     # ----------------------------
     # Action callbacks
@@ -245,47 +245,47 @@ class PlaceTileActionServer(Node):
             wait,
             release_force,
             DR_FC_MOD_REL,
-            DR_AXIS_Z,
+            DR_AXIS_Y,
             DR_BASE,
             DR_TOOL,
         )
 
         req = goal_handle.request
 
-        STX_Z = 20
+        STX_Y = 20
         STX_ROL = 10
         STX_PIT = 10
         STX_YAW = 10
 
-        FZ = float(req.max_press_force)
+        Force = float(req.max_press_force)
 
         self.get_logger().info(
             f"[SMART_TWIST] start | "
-            f"Fz={FZ:.3f}, Stx_z={STX_Z}, "
+            f"Force={Force:.3f}, Stx_z={STX_Y}, "
             f"Stx_roll={STX_ROL}, Stx_pitch={STX_PIT}, Stx_yaw={STX_YAW}"
         )
 
         if self.check_abort(goal_handle):
             return (False, 0.0, "canceled")
 
-        set_ref_coord(DR_TOOL)
+        set_ref_coord(DR_BASE)
         task_compliance_ctrl(
-            stx=[3000, 3000, STX_Z, STX_ROL, STX_PIT, STX_YAW],
+            stx=[3000, STX_Y, 3000, STX_ROL, STX_PIT, STX_YAW],
             time=0.0
         )
         wait(0.2)
 
-        search_force = min(30.0, FZ)
+        search_force = min(30.0, Force)
         set_desired_force(
-            fd=[0, 0, search_force, 0, 0, 0],
-            dir=[0, 0, 1, 0, 0, 0],
+            fd=[0, search_force, 0, 0, 0, 0],
+            dir=[0, 1, 0, 0, 0, 0],
             mod=DR_FC_MOD_REL
         )
 
         t0 = time.time()
         last_log = 0.0
         touched = False
-        contact_z = 0.0
+        contact_y = 0.0
         contact_joint = None
 
         try:
@@ -307,23 +307,23 @@ class PlaceTileActionServer(Node):
                     self.publish_feedback(goal_handle, "contact_search", ft, 0.0, 0.40)
                     last_log = now
 
-                if check_force_condition(DR_AXIS_Z, min=0, max=15.0) == -1:
+                if check_force_condition(DR_AXIS_Y, min=0, max=15.0, ref=DR_BASE) == -1:
                     base_pos, _ = get_current_posx(DR_BASE)
                     self.get_logger().info(f"[CONTACT] before_press_pos={base_pos}")
 
                     touched = True
                     contact_pos, _ = get_current_posx(DR_BASE)
-                    contact_z = float(contact_pos[2])
+                    contact_y = float(contact_pos[1])
                     contact_joint = get_current_posj()
 
                     self.get_logger().info(
-                        f"[CONTACT] touched=True contact_z={contact_z:.3f}"
+                        f"[CONTACT] touched=True contact_y={contact_y:.3f}"
                     )
 
                     release_force()
                     break
 
-                wait(1.0)
+                wait(0.1)
 
             if not touched or contact_joint is None:
                 self.get_logger().warn("[CONTACT] failed (timeout/no joint)")
@@ -336,7 +336,7 @@ class PlaceTileActionServer(Node):
 
             final_pos, _ = get_current_posx(DR_BASE)
             final_z = float(final_pos[2])
-            depth = float(contact_z - final_z)
+            depth = float(final_z-contact_y)
 
             self.get_logger().info(f"[RESULT] final_pose={final_pos} depth={depth:.3f}")
             self.publish_feedback(goal_handle, "pressed", self.read_ft_guess(), depth, 0.90)
@@ -478,8 +478,6 @@ class PlaceTileActionServer(Node):
         if not ok:
             return (False, press_depth, message)
 
-        # move_relative(0.0, 10.0, 0.0)
-        # mwait()
 
         move_relative(0.0, -23.68, 0.0)
         mwait()
@@ -495,16 +493,17 @@ class PlaceTileActionServer(Node):
             return (False, press_depth, "canceled")
 
         # 8) 툴 반납 위치 이동
-        tool_pre_release = [238.763, -373.264, 301.064]
-        tool_release = [235.122, -362.591, 123.0]
+        tool_pre_release = [233.122, -350.591, 143.064]
+        tool_release = [233.122, -350.591, 123.0]
 
         move_absoulte(tool_pre_release[0], tool_pre_release[1], tool_pre_release[2])
         move_absoulte(tool_release[0], tool_release[1], tool_release[2])
 
+        self.gripper.open_gripper()
+        
         # 8) 툴 반납후 상단 이동
         move_relative(0.0, 0.0, 30.0)
 
-        self.gripper.open_gripper()
 
         # 9) 홈 복귀
         self.publish_feedback(goal_handle, "return_home", None, press_depth, 0.98)

@@ -119,7 +119,7 @@ class TaskManagerNode(Node):
         self.current_detail_progress = 0.0
         self.current_state = ""
 
-        self.get_logger().info("\033[94m [1/4] [TASK MANAGER] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [1/5] [TASK MANAGER] initialize Done!\033[0m")
         self.get_logger().info(f"pick action    : {robot_ns}/tile/pick")
         self.get_logger().info(f"cowork action  : {robot_ns}/tile/cowork")
 

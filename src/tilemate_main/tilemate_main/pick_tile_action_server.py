@@ -55,7 +55,7 @@ class PickTileActionServer(Node):
         )
 
         self.get_logger().info(f"[PICK_TILE] gripper2cam_path={gripper2cam_path}")
-        self.get_logger().info("\033[94m [2/4] [PICK_TILE] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [2/5] [PICK_TILE] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # Action callbacks
@@ -310,7 +310,7 @@ class PickTileActionServer(Node):
         movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
         mwait()
 
-        
+
         return True, "pick_success"
 
 

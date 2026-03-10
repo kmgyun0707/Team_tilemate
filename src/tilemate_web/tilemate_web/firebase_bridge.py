@@ -349,7 +349,9 @@ class FirebaseBridgeNode(Node):
 
         tile_index = int(fb.tile_index)
         tile_type = int(fb.tile_type)
-        tile_step = int(fb.tile_step)
+        
+        # 액션 파일의 detail_step을 파이어베이스의 tile_step으로 매핑
+        tile_step = int(fb.detail_step) 
         overall_step = int(fb.overall_step)
 
         # 완료 개수 추정
@@ -367,7 +369,8 @@ class FirebaseBridgeNode(Node):
             "working_tile": tile_index,
             "tile_type": tile_type,
             "tile_step": tile_step,
-            "tile_progress": float(fb.tile_progress),
+            # 액션 파일의 detail_progress를 파이어베이스의 tile_progress로 매핑
+            "tile_progress": float(fb.detail_progress), 
             "completed_jobs": completed_jobs,
             "state": str(fb.state),
         })

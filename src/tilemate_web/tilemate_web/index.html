@@ -212,22 +212,32 @@
         <button id="btn-reset" onclick="resetSystem()">초기화</button>
     </div>
 
+    <div style="margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.95em; font-weight: bold; color: #1a237e; margin-bottom: 8px;">
+            <span>전체 작업 진행률</span>
+            <span id="overall-progress-text">0.0%</span>
+        </div>
+        <div style="width: 100%; height: 16px; background: #e0e0e0; border-radius: 8px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);">
+            <div id="overall-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #1a237e, #42a5f5); transition: width 0.3s ease;"></div>
+        </div>
+    </div>
+
     <div class="process-flow">
         <div id="step1" class="step">타일 파지</div>
         <div class="step">→</div>
-        <div id="step2" class="step">타일 툴에 배치</div>
+        <div id="step2" class="step">타일 툴에 두기</div>
         <div class="step">→</div>
-        <div id="step3" class="step">스크래퍼 파지</div>
+        <div id="step3" class="step">시멘트 도포</div>
         <div class="step">→</div>
-        <div id="step4" class="step">접착제 풀기</div>
+        <div id="step4" class="step">타일 툴 들기</div>
         <div class="step">→</div>
-        <div id="step5" class="step">접착제 바르기</div>
+        <div id="step5" class="step">타일 부착</div>
         <div class="step">→</div>
-        <div id="step6" class="step">타일 배치</div>
+        <div id="step6" class="step">타일 툴 반환</div>
         <div class="step">→</div>
-        <div id="step7" class="step">단차 확인</div>
+        <div id="step7" class="step">단차 검수</div>
         <div class="step">→</div>
-        <div id="step8" class="step">압착</div>
+        <div id="step8" class="step">압착 보정</div>
     </div>
 
     <div class="bottom-section" id="bottom-section" style="position: relative;">
@@ -352,12 +362,11 @@
         <div class="popup-box" style="width: 400px; text-align: center;">
             <div style="font-size: 3em; margin-bottom: 16px;">🎉</div>
             <h2 style="color: #1a237e; margin-bottom: 12px;">배치 끝!</h2>
-            <p style="color: #555; font-size: 1.1em; margin-bottom: 24px;">모든 타일 압착이 완료되었습니다.</p>
+            <p style="color: #555; font-size: 1.1em; margin-bottom: 24px;">모든 타일 작업이 성공적으로 완료되었습니다.</p>
             <button class="popup-confirm" onclick="document.getElementById('finish-popup').classList.remove('show')">확인</button>
         </div>
     </div>
 
-    <!-- ── 음성 녹음 팝업 ── -->
     <div class="popup-overlay" id="voice-popup">
         <div class="popup-box" style="width: 460px; text-align: center;">
             <h2>🎙️ 음성으로 패턴 선택</h2>
@@ -366,7 +375,6 @@
                 <small style="color:#999;">예: "흰색 체크무늬로 깔아줘", "전부 검정으로 깔아"</small>
             </p>
 
-            <!-- 상태 표시 -->
             <div id="voice-status-area" style="margin-bottom: 20px;">
                 <div id="voice-idle" style="display:flex; flex-direction:column; align-items:center; gap:12px;">
                     <div style="font-size:3em;">🎤</div>
@@ -477,10 +485,10 @@
             <button class="popup-cancel" onclick="backToDesignPopup()">← 뒤로</button>
         </div>
     </div>
+    
     <div class="popup-overlay" id="pointcloud-popup" style="z-index: 2000; background: rgba(0,0,0,0.55);">
         <div style="position:fixed; inset:0; z-index:2001; display:flex; flex-direction:column; background: rgba(10,10,26,0.97); overflow:hidden;">
 
-            <!-- 헤더 -->
             <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 20px; border-bottom:1px solid #1a3a5f; flex-shrink:0; background:#0d1525;">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span style="background:#c62828; color:#fff; font-size:0.72em; font-weight:bold; padding:2px 8px; border-radius:10px; letter-spacing:1px;">ADMIN</span>
@@ -491,12 +499,9 @@
                 </div>
             </div>
 
-            <!-- 본문: 좌우 분할 -->
             <div style="flex:1; display:flex; overflow:hidden; min-height:0;">
 
-                <!-- ── 왼쪽: 컬러 카메라 (크게) ── -->
                 <div style="flex:1.2; display:flex; flex-direction:column; border-right:2px solid #1a3a5f; min-width:0;">
-                    <!-- 컬러 카메라 헤더 -->
                     <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 16px; background:#0d1525; border-bottom:1px solid #1a3a5f; flex-shrink:0;">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span style="color:#a5d6a7; font-size:1em; font-weight:bold;">📷 컬러 카메라</span>
@@ -505,7 +510,6 @@
                         </div>
                         <button id="color-subscribe-btn" onclick="toggleColorSubscription()" style="padding:5px 12px; font-size:0.88em; background:#1565c0; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; flex:unset;">수신 시작</button>
                     </div>
-                    <!-- 컬러 이미지 영역 -->
                     <div style="flex:1; background:#060d1a; display:flex; align-items:center; justify-content:center; overflow:hidden; position:relative; min-height:0;">
                         <div id="color-placeholder" style="display:flex; flex-direction:column; align-items:center; gap:10px; color:#445;">
                             <div style="font-size:3em;">📷</div>
@@ -514,16 +518,13 @@
                         </div>
                         <canvas id="color-canvas" style="display:none; max-width:100%; max-height:100%; object-fit:contain;"></canvas>
                     </div>
-                    <!-- 컬러 카메라 하단 정보 -->
                     <div id="color-info-bar" style="display:none; padding:4px 16px; background:#0d1525; border-top:1px solid #1a3a5f; flex-shrink:0; font-size:0.78em; color:#778;">
                         <span id="color-resolution"></span>
                     </div>
                 </div>
 
-                <!-- ── 오른쪽: 깊이 이미지 + 포인트 클라우드 (위아래) ── -->
                 <div style="flex:1; display:flex; flex-direction:column; min-width:0;">
 
-                    <!-- 깊이 이미지 헤더 -->
                     <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 16px; background:#0d1525; border-bottom:1px solid #1a3a5f; flex-shrink:0;">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span style="color:#90caf9; font-size:1em; font-weight:bold;">🎨 깊이 이미지</span>
@@ -534,7 +535,6 @@
                         <button id="pc-subscribe-btn" onclick="toggleDepthSubscription()" style="padding:5px 12px; font-size:0.88em; background:#1565c0; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; flex:unset;">수신 시작</button>
                     </div>
 
-                    <!-- 깊이 이미지 영역 -->
                     <div style="flex:1; background:#060d1a; display:flex; align-items:center; justify-content:center; overflow:hidden; border-bottom:1px solid #1a3a5f; position:relative; min-height:0;">
                         <div id="pc-placeholder" style="display:flex; flex-direction:column; align-items:center; gap:10px; color:#445;">
                             <div style="font-size:2.5em;">🎨</div>
@@ -544,7 +544,6 @@
                         <canvas id="depth-canvas" style="display:none; max-width:100%; max-height:100%; image-rendering:pixelated;"></canvas>
                     </div>
 
-                    <!-- 깊이 범례 -->
                     <div id="depth-legend" style="display:none; align-items:center; gap:8px; font-size:0.78em; color:#778; background:#0d1525; border-bottom:1px solid #1a3a5f; padding:4px 16px; flex-shrink:0;">
                         <span id="legend-min" style="font-weight:bold; color:#42a5f5;"></span>
                         <div style="flex:1; height:8px; border-radius:4px; background:linear-gradient(to right,#0000ff,#00ff00,#ff0000); border:1px solid #334;"></div>
@@ -552,7 +551,6 @@
                         <span style="color:#556;">가까움 ← → 멀음</span>
                     </div>
 
-                    <!-- 포인트 클라우드 헤더 -->
                     <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 16px; background:#0d1525; border-bottom:1px solid #1a3a5f; flex-shrink:0;">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span style="color:#90caf9; font-size:1em; font-weight:bold;">☁️ 포인트 클라우드</span>
@@ -562,7 +560,6 @@
                         <button id="pc3d-subscribe-btn" onclick="togglePCSubscription()" style="padding:5px 12px; font-size:0.88em; background:#1565c0; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; flex:unset;">수신 시작</button>
                     </div>
 
-                    <!-- 포인트 클라우드 영역 -->
                     <div style="flex:1; position:relative; background:#060d1a; overflow:hidden; min-height:0;">
                         <div id="pc3d-placeholder" style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:#445;">
                             <div style="font-size:2.5em;">☁️</div>
@@ -577,7 +574,6 @@
     </div>
 </div>
 
-<!-- ── User / Admin 전환 버튼 (왼쪽 하단 고정) ── -->
 <div id="role-switcher">
     <div id="role-label">MODE</div>
     <div id="role-toggle">
@@ -619,10 +615,8 @@
     let prevCompletedJobs = 0;
     let isStarted = false;
     let isEstopped = false; // 비상정지 상태 플래그
-    let lastInspectNo = 0; // 마지막으로 처리한 inspect_no (타이밍 경쟁 방지)
 
     // 각 타일의 고유 색상 (red/black) 추적 - null이면 기본 상태색 사용
-    // 타일 색상이 지정되면 작업진행 상태(노란/초록/파란)와 무관하게 이 색상 유지
     const tileColors = new Array(TOTAL_TILES + 1).fill(null); // 1-indexed
     const tileState  = new Array(TOTAL_TILES + 1).fill('empty'); // 1-indexed
     let currentDesign = 0; // 현재 선택된 디자인 (1/2/3)
@@ -754,16 +748,15 @@
     animate();
 
     // -------------------------------------------------------
-    // Firebase: robot_status 실시간 수신
+    // Firebase: robot_status 실시간 수신 (새로운 Enum 기반 로직 반영)
     // -------------------------------------------------------
     database.ref('robot_status').on('value', (snapshot) => {
         const data = snapshot.val();
         if (!data) return;
 
+        // ── 1. 센서 데이터 및 로봇 상태 업데이트 ──
         const rawJointSpeed = data.joint_speed || 0;
-        const speedMps = rawJointSpeed.toFixed(3);
-        document.getElementById('robot-speed').innerText = speedMps;
-
+        document.getElementById('robot-speed').innerText = rawJointSpeed.toFixed(3);
         document.getElementById('robot-state').innerText = data.state || "대기";
         document.getElementById('job-count').innerText  = data.completed_jobs || 0;
 
@@ -778,6 +771,7 @@
                 `J1: ${(t['0']||0).toFixed(2)} &nbsp; J2: ${(t['1']||0).toFixed(2)} &nbsp; J3: ${(t['2']||0).toFixed(2)} &nbsp; J4: ${(t['3']||0).toFixed(2)} &nbsp; J5: ${(t['4']||0).toFixed(2)} &nbsp; J6: ${(t['5']||0).toFixed(2)}`;
         }
 
+        // 충돌 감지 비상 정지 로직
         if (data.state && data.state.includes('충돌 감지')) {
             const overlay = document.getElementById('estop-overlay');
             if (overlay.style.display !== 'flex') {
@@ -802,130 +796,113 @@
             if (resetGuide) resetGuide.style.display = 'block';
         }
 
-        const currentStep = data.current_step || 0;
-        updateProcessStep(currentStep);
-        if (data.design) currentDesign = parseInt(data.design);
-        const currentJobs = data.completed_jobs || 0;
-
-        // ★ Step 7: 단차 확인 및 압착 판단 로직 ★
-        // firebase_bridge.py 는 inspect_no 와 tile_level 을 별도 콜백으로 Firebase 에 씁니다.
-        // 따라서 inspect_no 가 바뀌는 순간 → 즉시 '단차 확인 중' 표시
-        //          tile_level 이 도착(>0)하면 → 결과(배치완료/압착필요) 표시
-        {
-            const inspectNo = (data.inspect_no != null) ? parseInt(data.inspect_no) : 0;
-            const levelVal  = (data.tile_level != null) ? parseFloat(data.tile_level) : 0.0;
-
-            if (isStarted && currentStep === 7 && inspectNo >= 1 && inspectNo <= TOTAL_TILES) {
-                const el = document.getElementById(`tile-${inspectNo}`);
-                if (el && tileState[inspectNo] !== 'pressed') {
-                    if (activeTimers[inspectNo]) {
-                        clearInterval(activeTimers[inspectNo]);
-                        delete activeTimers[inspectNo];
-                    }
-
-                    const color   = getTileColor(currentDesign, inspectNo);
-                    const isBlack = color === 0x212121;
-
-                    el.classList.remove('working', 'coated', 'running', 'finished');
-                    el.style.backgroundColor = isBlack ? '#212121' : '#ffffff';
-                    el.style.borderColor     = isBlack ? '#000000' : '#cccccc';
-                    el.style.display         = 'flex';
-                    el.style.flexDirection   = 'column';
-                    el.style.alignItems      = 'center';
-                    el.style.justifyContent  = 'center';
-                    el.style.textAlign       = 'center';
-                    el.style.fontSize        = '0.85em';
-
-                    if (inspectNo !== lastInspectNo) {
-                        // inspect_no 가 바뀐 순간 → 무조건 '단차 확인 중'
-                        // (tile_level 은 아직 이전 타일 값일 수 있으므로 무시)
-                        lastInspectNo = inspectNo;
-                        el.style.color = isBlack ? '#ffffff' : '#555555';
-                        el.innerText   = '단차\n확인 중';
-                        tileState[inspectNo] = 'checking';
-                    } else if (levelVal > 0) {
-                        // inspect_no 가 같고 tile_level 이 실제 측정값으로 도착한 경우
-                        if (levelVal >= 1.5) {
-                            el.style.color = isBlack ? '#ffaaaa' : '#c62828';
-                            el.innerText   = `압착필요\n${levelVal.toFixed(2)}mm`;
-                        } else {
-                            el.style.color = isBlack ? '#aaffaa' : '#2e7d32';
-                            el.innerText   = `배치완료\n${levelVal.toFixed(2)}mm`;
-                        }
-                        tileState[inspectNo] = 'checking';
-                    }
-
-                    tiles3D[inspectNo - 1].material.color.setHex(color !== null ? color : 0xffffff);
-                }
-            }
-        }
-
-        // 공정 단계별 타일 상태 (Step 1~3)
-        if (currentStep === 1) {
-            for (let i = 1; i <= TOTAL_TILES; i++) {
-                const el = document.getElementById(`tile-${i}`);
-                if (el && tileState[i] !== 'running' && tileState[i] !== 'finished' && tileState[i] !== 'pressed' && tileState[i] !== 'checking') {
-                    el.classList.remove('working', 'coated');
-                    el.style.backgroundColor = ''; el.style.borderColor = ''; el.innerText = '';
-                    tileState[i] = 'empty';
-                }
-            }
-        } else if (currentStep === 2) {
-            for (let i = 1; i <= TOTAL_TILES; i++) {
-                const el = document.getElementById(`tile-${i}`);
-                if (el && !['running', 'finished', 'pressed', 'checking'].includes(tileState[i])) {
-                    el.classList.add('coated'); tileState[i] = 'coated';
-                }
-            }
-        } else if (currentStep === 3) {
-            const workingTileId = currentJobs + 1;
-            if (workingTileId <= TOTAL_TILES) {
-                const el = document.getElementById(`tile-${workingTileId}`);
-                if (el && !['running', 'finished', 'pressed', 'checking'].includes(tileState[workingTileId])) {
-                    el.classList.add('working'); el.innerText = '작업중';
-                    tileState[workingTileId] = 'working';
-                    const color3 = getTileColor(currentDesign, workingTileId);
-                    tiles3D[workingTileId - 1].material.color.setHex(color3 !== null ? color3 : 0xffffff);
-                }
-            }
-        }
-
         if (isEstopped) return;
 
-        // Step 8: 압착 (press_no를 받아서 최종 '압착 완료' 표시)
-        if (isStarted && currentStep === 8) {
-            const pressing = data.press_no || 0;
-            if (pressing >= 1 && pressing <= TOTAL_TILES) {
-                const el = document.getElementById(`tile-${pressing}`);
-                if (el && tileState[pressing] !== 'pressed') {
-                    const color = getTileColor(currentDesign, pressing);
-                    const isBlack = color === 0x212121;
-                    el.classList.remove('working', 'coated', 'running', 'finished');
-                    el.style.backgroundColor = isBlack ? '#212121' : '#ffffff';
-                    el.style.borderColor      = isBlack ? '#000000' : '#cccccc';
-                    el.style.color            = isBlack ? '#aaffaa' : '#2e7d32';
-                    el.innerText = '압착 완료';
-                    tileState[pressing] = 'pressed';
-                    tiles3D[pressing - 1].material.color.setHex(color !== null ? color : 0xffffff);
+        // ── 2. 핵심 Enum 상태 변수 ──
+        const overallStep = data.current_step || 0; // 0: READY, 1: WORK, 2: FINISH
+        const tileStep    = data.tile_step || 0;    // 0: IDLE, 1: PICK, 2: PLACE, 3: INSPECT, 4: COMPACT, 5: DONE
+        if (data.design) currentDesign = parseInt(data.design);
+        const currentJobs = data.completed_jobs || 0;
+        const workingTileId = (data.working_tile !== undefined) ? parseInt(data.working_tile) + 1 : currentJobs + 1;
 
-                    if (tileState.slice(1).every(s => s === 'pressed')) {
-                        document.getElementById('finish-popup').classList.add('show');
+        // 전체 공정 진행률 업데이트
+        const overallProgress = data.overall_progress || 0.0;
+        document.getElementById('overall-progress-bar').style.width = (overallProgress * 100) + '%';
+        document.getElementById('overall-progress-text').innerText = (overallProgress * 100).toFixed(1) + '%';
+
+        // ── 3. 상단 Process Flow UI 업데이트 ──
+        // (8개의 HTML 노드가 있으므로, Enum 상태값에 따라 적절한 UI 박스를 활성화)
+        let activeUiStep = 0;
+        if (overallStep === 1) {
+            if (tileStep === 1) activeUiStep = 1;      // 파지
+            else if (tileStep === 2) activeUiStep = 5; // 부착
+            else if (tileStep === 3) activeUiStep = 7; // 검수 (UI: 단차 검수)
+            else if (tileStep === 4) activeUiStep = 8; // 압착 (UI: 압착 보정)
+        } else if (overallStep === 2) {
+            activeUiStep = 0;
+        }
+        updateProcessStep(activeUiStep);
+
+        // ── 4. 현재 작업 중인 타일의 렌더링 로직 (Step 1~4) ──
+        if (isStarted && overallStep === 1 && workingTileId >= 1 && workingTileId <= TOTAL_TILES) {
+            const tileEl = document.getElementById(`tile-${workingTileId}`);
+            if (tileEl && tileState[workingTileId] !== 'running' && tileState[workingTileId] !== 'finished') {
+                
+                // 타일 기본 색상 적용
+                const tColor = getTileColor(currentDesign, workingTileId);
+                const isBlack = (tColor === 0x212121);
+                tileEl.style.backgroundColor = isBlack ? '#212121' : '#ffffff';
+                tileEl.style.borderColor = isBlack ? '#000000' : '#cccccc';
+                
+                // 3D 뷰 색상 업데이트
+                tiles3D[workingTileId - 1].material.color.setHex(tColor !== null ? tColor : 0xffffff);
+
+                // 1) 파지(PICK) & 부착(PLACE) 단계: 파이차트 활성화
+                if (tileStep === 1 || tileStep === 2) {
+                    tileEl.classList.add('working');
+                    tileEl.style.color = isBlack ? '#ffffff' : '#333333';
+                    tileEl.innerText = (tileStep === 1) ? '파지 중' : '부착 중';
+                    tileState[workingTileId] = 'working';
+                    
+                    const tileProgress = data.tile_progress || 0.0;
+                    const deg = (tileProgress * 360).toFixed(1);
+                    const overlayColor = isBlack ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.2)';
+                    tileEl.style.backgroundImage = `conic-gradient(${overlayColor} ${deg}deg, transparent 0deg)`;
+                } 
+                // 2) 단차 검수(INSPECT) 단계
+                else if (tileStep === 3) {
+                    tileEl.classList.remove('working');
+                    tileEl.style.backgroundImage = ''; // 파이차트 지우기
+                    
+                    const levelVal = (data.tile_level != null) ? parseFloat(data.tile_level) : 0.0;
+                    if (levelVal > 0) {
+                        if (levelVal >= 1.5) {
+                            tileEl.style.color = isBlack ? '#ffaaaa' : '#c62828';
+                            tileEl.innerText = `압착필요\n${levelVal.toFixed(2)}mm`;
+                        } else {
+                            tileEl.style.color = isBlack ? '#aaffaa' : '#2e7d32';
+                            tileEl.innerText = `단차양호\n${levelVal.toFixed(2)}mm`;
+                        }
+                    } else {
+                        tileEl.style.color = isBlack ? '#ffffff' : '#555555';
+                        tileEl.innerText = '단차\n확인 중';
                     }
+                    tileState[workingTileId] = 'checking';
+                }
+                // 3) 압착 보정(COMPACT) 단계
+                else if (tileStep === 4) {
+                    tileEl.classList.remove('working');
+                    tileEl.style.backgroundImage = '';
+                    tileEl.style.color = isBlack ? '#aaffaa' : '#2e7d32';
+                    tileEl.innerText = '압착 중';
+                    tileState[workingTileId] = 'pressing';
                 }
             }
         }
 
-        // 배치가 끝나고 마르는 타이머 시작 로직
+        // ── 5. 작업이 완료(DONE)된 타일들 타이머 시작 처리 ──
         if (currentJobs > prevCompletedJobs) {
             for (let i = prevCompletedJobs + 1; i <= currentJobs; i++) {
-                if (!['running', 'finished', 'pressed', 'checking'].includes(tileState[i])) {
+                if (!['running', 'finished'].includes(tileState[i])) {
+                    const el = document.getElementById(`tile-${i}`);
+                    if (el) {
+                        el.style.backgroundImage = ''; // 혹시 남은 파이차트 깔끔히 지우기
+                        el.innerText = '부착 완료';
+                    }
+                    // 마르는 중(건조) 타이머 시작
+                    startTileTimer(i, 120);
+                    
                     const colorJob = getTileColor(currentDesign, i);
                     tiles3D[i - 1].material.color.setHex(colorJob !== null ? colorJob : 0xffffff);
-                    startTileTimer(i, 120);
                 }
             }
         }
         prevCompletedJobs = currentJobs;
+
+        // ── 6. 전체 공정 완료 (OVERALL_FINISHED) ──
+        if (overallStep === 2 && isStarted && !document.getElementById('finish-popup').classList.contains('show')) {
+            document.getElementById('finish-popup').classList.add('show');
+        }
     });
 
     function updateProcessStep(stepNumber) {
@@ -1124,7 +1101,7 @@
     function pauseTimer() { if (timerInterval) { clearInterval(timerInterval); timerInterval = null; } }
 
     function resetSystem() {
-        pauseTimer(); elapsedSeconds = 0; isStarted = false; isEstopped = false; prevCompletedJobs = 0; lastInspectNo = 0;
+        pauseTimer(); elapsedSeconds = 0; isStarted = false; isEstopped = false; prevCompletedJobs = 0; 
         document.getElementById('timer').innerText = '00 : 00 : 00';
         for (let id in activeTimers) clearInterval(activeTimers[id]);
         Object.keys(activeTimers).forEach(key => delete activeTimers[key]);

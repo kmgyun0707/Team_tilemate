@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'fire=tilemate_web.firebase_bridge:main',
+            'firebase=tilemate_web.firebase_bridge.firebase_bridge:main',
             'no=tilemate_web.testno:main',
             'web=tilemate_web.websocket_bridge:main',
         ],

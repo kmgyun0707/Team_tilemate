@@ -1225,7 +1225,7 @@
     }
 
     function applyCustomBtnStyle(btn, val) {
-        if (val === 'A') {
+        if (val === 'B') {
             btn.style.background = '#212121'; btn.style.color = '#fff'; btn.style.borderColor = '#000';
         } else {
             btn.style.background = '#ffffff'; btn.style.color = '#333'; btn.style.borderColor = '#aaa';
@@ -1237,7 +1237,7 @@
         pg.innerHTML = '';
         customValues.forEach(v => {
             const cell = document.createElement('div');
-            cell.className = 'preview-cell ' + (v === 'A' ? 'pc-black' : '');
+            cell.className = 'preview-cell ' + (v === 'B' ? 'pc-black' : '');
             pg.appendChild(cell);
         });
     }
@@ -1246,7 +1246,7 @@
         const patternStr = customValues.join(',');
         closePopup();
         database.ref('robot_command').set({ action: 'start', design: 3, custom_pattern: patternStr, is_resume: false, timestamp: Date.now() });
-        DESIGN_COLORS[3] = customValues.map(v => v === 'A' ? 'B' : 'W');
+        DESIGN_COLORS[3] = customValues.map(v => v === 'B' ? 'B' : 'W');
         isStarted = true; showCustomPatternPreview(customValues);
         if (!timerInterval) startTimer();
     }

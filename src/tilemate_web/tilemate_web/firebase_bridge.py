@@ -39,7 +39,7 @@ from std_msgs.msg import Float32, Int32, String, Float32MultiArray, Bool
 from sensor_msgs.msg import JointState
 from dsr_msgs2.srv import GetToolForce, GetExternalTorque
 
-from tilemate_msgs.action import ExecuteJob, Cowork
+from tilemate_msgs.action import ExecuteJob
 
 import firebase_admin
 from firebase_admin import credentials, db
@@ -162,22 +162,11 @@ class FirebaseBridgeNode(Node):
         # --------------------------------------------------
         self.task_job_client = ActionClient(self, ExecuteJob, "/task/run_job")
 
-        # --------------------------------------------------
-        # CoworkActionServer 직접 호출 클라이언트
-        # TaskManager 없이 /dsr01/tile/cowork 로 직접 goal 전송
-        # --------------------------------------------------
-        self.cowork_client = ActionClient(self, Cowork, "/dsr01/tile/cowork")
-
         self._active_goal_handle = None
         self._active_result_future = None
         self._active_token = ""
         self._last_completed_jobs_fb = 0
         self._last_tile_step_fb = 0
-
-        # 직접 cowork 실행 시 타일 순서 관리
-        self._cowork_layout = []          # [tile_type, ...] 9개
-        self._cowork_tile_idx = 0         # 현재 진행 중인 타일 인덱스
-        self._cowork_running = False      # 실행 중 플래그
 
         # --------------------------------------------------
         # 서비스 클라이언트
@@ -218,6 +207,8 @@ class FirebaseBridgeNode(Node):
             try:
                 self._stt = STT(os.getenv("OPENAI_API_KEY", ""))
                 self._keyword_extractor = ExtractKeyword()
+                # 캘리브레이션 완료 → Firebase stt_mic_state: listening 알림
+                self._stt.on_listening = lambda: self.ref.update({"stt_mic_state": "listening"})
                 self.get_logger().info("STT / KeywordExtractor 초기화 완료")
             except Exception as e:
                 self._stt = None
@@ -390,165 +381,6 @@ class FirebaseBridgeNode(Node):
                 "message": result.message,
             })
 
-    # ==================================================
-    # CoworkActionServer 직접 호출 (TaskManager 없이)
-    # ==================================================
-
-    def _start_cowork_sequence(self, cmd_dict):
-        """
-        웹 start 명령 수신 시 CoworkActionServer로 직접 타일을 순서대로 실행.
-        별도 스레드에서 돌아가며 타일 9개를 순차 처리.
-        """
-        if self._cowork_running:
-            self.get_logger().warn("[COWORK] 이미 실행 중입니다.")
-            return
-
-        try:
-            pattern_str, design_id = self._resolve_design_pattern(cmd_dict)
-            layout = self._pattern_to_layout(pattern_str)
-        except Exception as e:
-            self.get_logger().error(f"[COWORK] 패턴 파싱 실패: {e}")
-            self.ref.update({"state": f"패턴 오류: {e}"})
-            return
-
-        token = str(cmd_dict.get("token", f"job_{int(time.time() * 1000)}"))
-        start_idx = int(cmd_dict.get("completed_jobs", 0))  # resume 시 이어서 시작
-
-        self._cowork_layout = layout
-        self._cowork_tile_idx = start_idx
-        self._cowork_running = True
-        self._active_token = token
-
-        self.ref.update({
-            "state": "작업 시작",
-            "design": design_id,
-            "design_ab": pattern_str,
-            "token": token,
-            "completed_jobs": start_idx,
-            "overall_progress": start_idx / len(layout),
-            "working_tile": start_idx,
-            "tile_step": 0,
-            "cement_state": "idle",
-        })
-
-        t = threading.Thread(target=self._cowork_loop, daemon=True)
-        t.start()
-
-    def _cowork_loop(self):
-        """타일을 인덱스 순서대로 CoworkActionServer에 순차 전송."""
-        layout = self._cowork_layout
-        total  = len(layout)
-
-        if not self.cowork_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("[COWORK] /dsr01/tile/cowork 서버 연결 실패")
-            self.ref.update({"state": "Cowork 서버 연결 실패"})
-            self._cowork_running = False
-            return
-
-        while self._cowork_tile_idx < total and self._cowork_running:
-            idx       = self._cowork_tile_idx
-            tile_type = layout[idx]
-
-            self.get_logger().info(f"[COWORK] 타일 {idx+1}/{total} 시작 (type={tile_type})")
-            self.ref.update({
-                "state": f"타일 {idx+1}/{total} 작업 중",
-                "working_tile": idx,
-                "tile_type": tile_type,
-                "tile_step": 1,
-                "overall_progress": idx / total,
-            })
-
-            # goal 생성
-            goal = Cowork.Goal()
-            goal.tile_index       = idx
-            goal.tile_type        = tile_type
-            goal.job_token        = self._active_token
-            goal.wait_cement_done = True   # 항상 시멘트 대기
-
-            # 동기적으로 결과 대기 (Event 사용)
-            done_event  = threading.Event()
-            result_box  = [None]
-
-            def on_response(future, _done=done_event, _box=result_box):
-                gh = future.result()
-                if not gh.accepted:
-                    self.get_logger().error(f"[COWORK] goal rejected (tile={idx})")
-                    _box[0] = False
-                    _done.set()
-                    return
-                res_future = gh.get_result_async()
-                res_future.add_done_callback(
-                    lambda f, __done=_done, __box=_box: _on_result(f, __done, __box)
-                )
-
-            def _on_result(future, _done, _box):
-                try:
-                    r = future.result().result
-                    _box[0] = r.success
-                    self.get_logger().info(
-                        f"[COWORK] 타일 완료: success={r.success}, msg={r.message}"
-                    )
-                except Exception as e:
-                    self.get_logger().error(f"[COWORK] result 오류: {e}")
-                    _box[0] = False
-                _done.set()
-
-            send_future = self.cowork_client.send_goal_async(
-                goal,
-                feedback_callback=self._fb_cowork,
-            )
-            send_future.add_done_callback(on_response)
-
-            done_event.wait(timeout=600.0)  # 최대 10분 대기
-
-            if result_box[0] is False:
-                self.get_logger().error(f"[COWORK] 타일 {idx+1} 실패. 작업 중단.")
-                self.ref.update({"state": f"타일 {idx+1} 실패", "tile_step": 0})
-                self._cowork_running = False
-                return
-
-            # 타일 완료
-            self._cowork_tile_idx += 1
-            self._last_completed_jobs_fb = self._cowork_tile_idx
-            self.ref.update({
-                "completed_jobs": self._cowork_tile_idx,
-                "overall_progress": self._cowork_tile_idx / total,
-                "tile_step": 5,
-            })
-
-        # 전체 완료
-        if self._cowork_running:
-            self.ref.update({
-                "state": "작업 완료",
-                "current_step": 2,
-                "overall_progress": 1.0,
-                "tile_step": 0,
-            })
-            self.get_logger().info("[COWORK] 전체 타일 작업 완료!")
-
-        self._cowork_running = False
-
-    def _fb_cowork(self, fb_msg):
-        """CoworkActionServer 피드백 → Firebase 업데이트 + 시멘트 트리거."""
-        fb    = fb_msg.feedback
-        stage = str(fb.stage)
-        step  = int(fb.current_step)
-
-        self.ref.update({
-            "state": stage,
-            "tile_step": step,
-        })
-
-        # WAIT_HUMAN_TAKE 단계 진입 시 시멘트 흐름 트리거
-        if stage == "WAIT_HUMAN_TAKE" and not self._cement_waiting:
-            self.get_logger().info("[CEMENT] WAIT_HUMAN_TAKE 감지 → 시멘트 TTS + 대기 시작")
-            self._cement_waiting = True
-            self._cement_wait_thread = threading.Thread(
-                target=self._cement_wait_flow,
-                daemon=True,
-            )
-            self._cement_wait_thread.start()
-
     def _fb_task_job(self, fb_msg):
         fb = fb_msg.feedback
 
@@ -560,10 +392,30 @@ class FirebaseBridgeNode(Node):
         overall_step = int(fb.overall_step)
 
         # 완료 개수 추정
+        # TaskManager에서는 tile_step == TILE_STEP_DONE(5)일 때 타일 완료로 볼 수 있음
         completed_jobs = self._last_completed_jobs_fb
         if tile_step == 5 and self._last_tile_step_fb != 5:
             completed_jobs = max(completed_jobs, tile_index + 1)
             self._last_completed_jobs_fb = completed_jobs
+
+        # --------------------------------------------------
+        # 파지(1) 완료 후 부착(2) 진입 직전 → 시멘트 TTS + 대기
+        # tile_step이 1 → 2로 바뀌는 순간 1회만 트리거
+        # --------------------------------------------------
+        if (
+            tile_step == 2
+            and self._last_tile_step_fb == 1
+            and not self._cement_waiting
+        ):
+            self.get_logger().info("[CEMENT] 파지 완료(1→2 전환) 감지 → 시멘트 TTS + 대기 시작")
+            self._cement_waiting = True
+            self.ref.update({"state": "시멘트 작업 대기 중"})
+
+            self._cement_wait_thread = threading.Thread(
+                target=self._cement_wait_flow,
+                daemon=True,
+            )
+            self._cement_wait_thread.start()
 
         self._last_tile_step_fb = tile_step
 
@@ -573,6 +425,7 @@ class FirebaseBridgeNode(Node):
             "working_tile": tile_index,
             "tile_type": tile_type,
             "tile_step": tile_step,
+            # 액션 파일의 detail_progress를 파이어베이스의 tile_progress로 매핑
             "tile_progress": float(fb.detail_progress), 
             "completed_jobs": completed_jobs,
             "state": str(fb.state),
@@ -793,25 +646,35 @@ class FirebaseBridgeNode(Node):
                 "cement_state": "waiting_pick",
             })
             self.get_logger().info("[CEMENT] 1단계: 타일 파지 대기")
+            self.ref.update({"stt_mic_state": "tts_speaking"})
             self._speak("타일을 잡고 시멘트를 발라주세요")
+            time.sleep(0.5)  # TTS 잔향 방지
 
             if self._stt is None:
                 self.get_logger().warn("[CEMENT] STT 없음. 5초 후 자동 진행합니다.")
                 time.sleep(5.0)
             else:
                 recognized = False
+                first_attempt = True
                 while not recognized:
                     try:
                         self.get_logger().info("[CEMENT] 🎙 타일 파지 음성 대기 중...")
-                        text = self._stt.speech2text()
+                        # 첫 시도만 캘리브레이션, 재시도는 바로 listening
+                        if first_attempt:
+                            self.ref.update({"stt_mic_state": "calibrating"})
+                        text = self._stt.speech2text()   # 내부에서 calibrate → listen (재시도 시 바로 listen)
+                        first_attempt = False
                         self.get_logger().info(f"[CEMENT] STT 결과: '{text}'")
                         if any(kw in text for kw in PICK_KEYWORDS):
                             recognized = True
+                            self.ref.update({"stt_mic_state": ""})
                         else:
                             self.get_logger().info("[CEMENT] 키워드 미감지. 재청취...")
-                            self._speak("타일을 잡으면 타일 잡았어 라고 말해주세요")
+                            self.ref.update({"stt_mic_state": "retry"})
                     except Exception as e:
                         self.get_logger().error(f"[CEMENT] STT 오류: {e}")
+                        self.ref.update({"stt_mic_state": "retry"})
+                        first_attempt = False
                         time.sleep(1.0)
 
             # → ROS: /dsr01/cowork/human_take_confirm = true
@@ -819,37 +682,46 @@ class FirebaseBridgeNode(Node):
             msg_take.data = True
             self._publish_reliable(self._pub_human_take, msg_take, retries=3)
             self.get_logger().info("[CEMENT] human_take_confirm 토픽 전송 완료")
-            self.ref.update({"state": "타일 내려놓는 중", "cement_state": "tile_release"})
+            self.ref.update({"state": "타일 내려놓는 중", "cement_state": "tile_release", "stt_mic_state": ""})
 
             # ── 2단계: 시멘트 도포 대기 ────────────────────
             # 모달 먼저 띄우고 → TTS 재생
             self.ref.update({
                 "state": "시멘트 도포 대기 중 - 다 바르면 '시멘트 다 발랐어' 라고 말해주세요",
                 "cement_state": "waiting_cement",
+                "stt_mic_state": "",
             })
             self.get_logger().info("[CEMENT] 2단계: 시멘트 도포 대기")
+            self.ref.update({"stt_mic_state": "tts_speaking"})
             self._speak("시멘트를 다 바르면 타일을 주세요")
+            time.sleep(0.5)  # TTS 잔향 방지
 
             if self._stt is None:
                 self.get_logger().warn("[CEMENT] STT 없음. 5초 후 자동 재개합니다.")
                 time.sleep(5.0)
             else:
                 recognized = False
+                first_attempt = True
                 while not recognized:
                     try:
                         self.get_logger().info("[CEMENT] 🎙 시멘트 완료 음성 대기 중...")
-                        text = self._stt.speech2text()
+                        # 첫 시도만 캘리브레이션, 재시도는 바로 listening
+                        if first_attempt:
+                            self.ref.update({"stt_mic_state": "calibrating"})
+                        text = self._stt.speech2text()   # 내부에서 calibrate → listen (재시도 시 바로 listen)
+                        first_attempt = False
                         self.get_logger().info(f"[CEMENT] STT 결과: '{text}'")
                         if any(kw in text for kw in CEMENT_KEYWORDS):
                             recognized = True
+                            self.ref.update({"stt_mic_state": ""})
                         else:
                             self.get_logger().info("[CEMENT] 키워드 미감지. 재청취...")
-                            self._speak("시멘트를 다 바르면 시멘트 다 발랐어 라고 말해주세요")
+                            self.ref.update({"stt_mic_state": "retry"})
                     except Exception as e:
                         self.get_logger().error(f"[CEMENT] STT 오류: {e}")
+                        self.ref.update({"stt_mic_state": "retry"})
+                        first_attempt = False
                         time.sleep(1.0)
-
-            # → ROS: /dsr01/cowork/cement_done = true
             msg_cement = Bool()
             msg_cement.data = True
             self._publish_reliable(self._pub_cement_done, msg_cement, retries=3)
@@ -883,7 +755,7 @@ class FirebaseBridgeNode(Node):
             if self._stt is None or self._keyword_extractor is None:
                 raise RuntimeError("STT 또는 KeywordExtractor가 초기화되지 않았습니다.")
 
-            # 1) 음성 녹음 및 텍스트 변환 (5초)
+            # 1) 음성 녹음 및 텍스트 변환 (VAD 자동 감지)
             text = self._stt.speech2text()
             self.get_logger().info(f"[STT] 인식 결과: {text}")
             self.ref.update({"stt_state": "extracting", "stt_text": text})
@@ -933,13 +805,14 @@ class FirebaseBridgeNode(Node):
                         )
                         stt_thread.start()
 
-                    # start -> CoworkActionServer 직접 호출
+                    # start -> ExecuteJob goal
                     elif action == "start":
-                        self._start_cowork_sequence(cmd)
+                        is_resume = bool(cmd.get("is_resume", False))
+                        self._send_task_job_goal(cmd, is_resume=is_resume)
 
-                    # resume -> 이어서 시작
+                    # resume -> ExecuteJob goal (강제 true)
                     elif action == "resume":
-                        self._start_cowork_sequence(cmd)
+                        self._send_task_job_goal(cmd, is_resume=True)
 
                     # stop -> active goal cancel + 기존 stop topic
                     elif action == "stop":

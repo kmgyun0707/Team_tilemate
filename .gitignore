@@ -9,8 +9,7 @@ __pycache__/
 *.egg-info/
 
 # Environment Variables / Secrets
-.env
-*.env
+src/tilemate_web/tilemate_web/.env
 *.json
 src/cobot1/config/*.json
 

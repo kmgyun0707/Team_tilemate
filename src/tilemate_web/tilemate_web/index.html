@@ -247,6 +247,34 @@
             0%, 100% { opacity: 1; }
             50%       { opacity: 0.2; }
         }
+        /* ── 시멘트 STT 상태 UI ── */
+        .cement-stt-state {
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .cement-stt-label {
+            font-weight: bold;
+            font-size: 1em;
+        }
+        .cement-stt-sub {
+            color: #999;
+            font-size: 0.85em;
+        }
+        .cement-calib-bar-wrap {
+            width: 160px;
+            height: 5px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .cement-calib-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #ef6c00, #ffa726);
+            border-radius: 3px;
+            transition: width 0.08s linear;
+        }
     </style>
 </head>
 <body>
@@ -257,6 +285,7 @@
     <!-- 시멘트 대기 모달 -->
     <div id="cement-modal">
         <div id="cement-modal-box">
+
             <!-- 1단계: 타일 파지 대기 -->
             <div id="cement-phase-pick">
                 <div class="cement-emoji">🤲</div>
@@ -264,8 +293,33 @@
                 <p>타일을 잡고 시멘트를 발라주세요.</p>
                 <p>타일을 잡으면 아래와 같이 말해주세요.</p>
                 <div class="cement-hint">"타일 잡았어"</div>
-                <span class="cement-mic">🎙️</span>
+                <!-- STT 상태 표시 -->
+                <div id="cement-stt-pick" style="margin-top:20px;">
+                    <div id="cement-stt-pick-idle" class="cement-stt-state" style="display:flex;">
+                        <span class="cement-mic">🎙️</span>
+                    </div>
+                    <div id="cement-stt-pick-tts_speaking" class="cement-stt-state" style="display:none;">
+                        <div style="font-size:2em;">🔈</div>
+                        <div class="cement-stt-label" style="color:#1a237e;">말씀 중...</div>
+                        <div class="cement-stt-sub">안내가 끝나면 말씀해 주세요</div>
+                    </div>
+                    <div id="cement-stt-pick-calibrating" class="cement-stt-state" style="display:none;">
+                        <div class="cement-stt-label" style="color:#ef6c00;">🔊 배경 소음 측정 중...</div>
+                        <div class="cement-calib-bar-wrap"><div id="cement-calib-bar-pick" class="cement-calib-bar"></div></div>
+                        <div class="cement-stt-sub">잠시 조용히 해주세요</div>
+                    </div>
+                    <div id="cement-stt-pick-listening" class="cement-stt-state" style="display:none;">
+                        <div style="font-size:2em; animation:cement-mic-blink 0.8s step-start infinite;">🔴</div>
+                        <div class="cement-stt-label" style="color:#c62828;">녹음 중... 말씀하세요</div>
+                        <div class="cement-stt-sub">말이 끝나면 자동으로 멈춥니다</div>
+                    </div>
+                    <div id="cement-stt-pick-retry" class="cement-stt-state" style="display:none;">
+                        <div style="font-size:2em;">🔁</div>
+                        <div class="cement-stt-label" style="color:#888;">인식 못했어요. 다시 말해주세요</div>
+                    </div>
+                </div>
             </div>
+
             <!-- 2단계: 시멘트 도포 대기 -->
             <div id="cement-phase-cement" style="display:none;">
                 <div class="cement-emoji">🧱</div>
@@ -273,8 +327,33 @@
                 <p>타일에 시멘트를 다 바른 후</p>
                 <p>아래와 같이 말해주세요.</p>
                 <div class="cement-hint">"시멘트 다 발랐어"</div>
-                <span class="cement-mic">🎙️</span>
+                <!-- STT 상태 표시 -->
+                <div id="cement-stt-cement" style="margin-top:20px;">
+                    <div id="cement-stt-cement-idle" class="cement-stt-state" style="display:flex;">
+                        <span class="cement-mic">🎙️</span>
+                    </div>
+                    <div id="cement-stt-cement-tts_speaking" class="cement-stt-state" style="display:none;">
+                        <div style="font-size:2em;">🔈</div>
+                        <div class="cement-stt-label" style="color:#1a237e;">말씀 중...</div>
+                        <div class="cement-stt-sub">안내가 끝나면 말씀해 주세요</div>
+                    </div>
+                    <div id="cement-stt-cement-calibrating" class="cement-stt-state" style="display:none;">
+                        <div class="cement-stt-label" style="color:#ef6c00;">🔊 배경 소음 측정 중...</div>
+                        <div class="cement-calib-bar-wrap"><div id="cement-calib-bar-cement" class="cement-calib-bar"></div></div>
+                        <div class="cement-stt-sub">잠시 조용히 해주세요</div>
+                    </div>
+                    <div id="cement-stt-cement-listening" class="cement-stt-state" style="display:none;">
+                        <div style="font-size:2em; animation:cement-mic-blink 0.8s step-start infinite;">🔴</div>
+                        <div class="cement-stt-label" style="color:#c62828;">녹음 중... 말씀하세요</div>
+                        <div class="cement-stt-sub">말이 끝나면 자동으로 멈춥니다</div>
+                    </div>
+                    <div id="cement-stt-cement-retry" class="cement-stt-state" style="display:none;">
+                        <div style="font-size:2em;">🔁</div>
+                        <div class="cement-stt-label" style="color:#888;">인식 못했어요. 다시 말해주세요</div>
+                    </div>
+                </div>
             </div>
+
         </div>
     </div>
 
@@ -466,10 +545,19 @@
                     <div style="font-size:3em;">🎤</div>
                     <div style="color:#888; font-size:0.95em;">녹음 대기 중</div>
                 </div>
+                <div id="voice-calibrating" style="display:none; flex-direction:column; align-items:center; gap:12px;">
+                    <div style="font-size:3em;">🔊</div>
+                    <div style="color:#ef6c00; font-weight:bold; font-size:1.05em;">배경 소음 측정 중...</div>
+                    <div style="color:#999; font-size:0.9em;">잠시 조용히 해주세요</div>
+                    <div style="width:180px; height:6px; background:#e0e0e0; border-radius:3px; overflow:hidden;">
+                        <div id="calib-bar" style="height:100%; width:0%; background:linear-gradient(90deg,#ef6c00,#ffa726); border-radius:3px; transition:width 0.1s linear;"></div>
+                    </div>
+                    <div id="calib-countdown" style="font-size:0.85em; color:#aaa;">1초 후 녹음 시작</div>
+                </div>
                 <div id="voice-recording" style="display:none; flex-direction:column; align-items:center; gap:12px;">
                     <div style="font-size:3em; animation: blink-estop 1s step-start infinite;">🔴</div>
-                    <div style="color:#c62828; font-weight:bold; font-size:1.05em;">녹음 중...</div>
-                    <div id="voice-countdown" style="font-size:1.4em; font-weight:bold; color:#1a237e;">5</div>
+                    <div style="color:#c62828; font-weight:bold; font-size:1.05em;">녹음 중... 말씀하세요</div>
+                    <div style="color:#999; font-size:0.85em;">말이 끝나면 자동으로 멈춥니다</div>
                 </div>
                 <div id="voice-processing" style="display:none; flex-direction:column; align-items:center; gap:12px;">
                     <div style="font-size:3em;">⏳</div>
@@ -856,11 +944,13 @@
             phasePick.style.display   = 'block';
             phaseCement.style.display = 'none';
             cementModal.classList.add('show');
+            updateCementSttUI('pick', data.stt_mic_state || '');
         } else if (cs === 'waiting_cement') {
             // 2단계: 시멘트 발라주세요
             phasePick.style.display   = 'none';
             phaseCement.style.display = 'block';
             cementModal.classList.add('show');
+            updateCementSttUI('cement', data.stt_mic_state || '');
         } else {
             cementModal.classList.remove('show');
         }
@@ -1507,7 +1597,7 @@
 
     function resetVoiceUI() {
         clearVoiceTimers();
-        ['voice-idle','voice-recording','voice-processing','voice-done','voice-error']
+        ['voice-idle','voice-calibrating','voice-recording','voice-processing','voice-done','voice-error']
             .forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.style.display = 'none';
@@ -1523,7 +1613,7 @@
     }
 
     function showVoiceState(state) {
-        ['voice-idle','voice-recording','voice-processing','voice-done','voice-error']
+        ['voice-idle','voice-calibrating','voice-recording','voice-processing','voice-done','voice-error']
             .forEach(id => { document.getElementById(id).style.display = 'none'; });
         const el = document.getElementById('voice-' + state);
         if (el) el.style.display = 'flex';
@@ -1536,39 +1626,60 @@
             timestamp: Date.now()
         });
 
-        // UI: 녹음 중 상태로 전환
-        showVoiceState('recording');
+        // UI: 캘리브레이션 상태로 전환
+        showVoiceState('calibrating');
         document.getElementById('voice-record-btn').style.display = 'none';
 
-        // 5초 카운트다운
-        let count = 5;
-        document.getElementById('voice-countdown').innerText = count;
-        voiceCountdownTimer = setInterval(() => {
-            count--;
-            document.getElementById('voice-countdown').innerText = count;
-            if (count <= 0) {
-                clearInterval(voiceCountdownTimer);
-                voiceCountdownTimer = null;
-                showVoiceState('processing');
+        // 캘리브레이션 프로그레스바 (1초)
+        let elapsed = 0;
+        const calibDuration = 1000; // ms
+        const calibInterval = 50;
+        const calib = setInterval(() => {
+            elapsed += calibInterval;
+            const pct = Math.min(100, (elapsed / calibDuration) * 100);
+            document.getElementById('calib-bar').style.width = pct + '%';
+            const remaining = ((calibDuration - elapsed) / 1000).toFixed(1);
+            document.getElementById('calib-countdown').innerText =
+                elapsed < calibDuration ? `${remaining}초 후 녹음 시작` : '대기 중...';
+            if (elapsed >= calibDuration) {
+                clearInterval(calib);
+                // 캘리브레이션 끝 → 녹음 중 상태
+                showVoiceState('recording');
+                // Firebase stt_state가 'recording'으로 바뀌면 폴링 시작
                 startPollingForSTTResult();
             }
-        }, 1000);
+        }, calibInterval);
     }
 
     function startPollingForSTTResult() {
         // Firebase robot_status/stt_layout 필드가 채워질 때까지 폴링
+        // stt_state: recording → extracting → done / error 에 따라 UI 전환
         let attempts = 0;
-        const maxAttempts = 40; // 최대 20초 대기
+        const maxAttempts = 60; // 최대 30초 대기
 
         voicePollingTimer = setInterval(() => {
             attempts++;
-            database.ref('robot_status/stt_layout').once('value', (snap) => {
-                const val = snap.val();
+            database.ref('robot_status').once('value', (snap) => {
+                const status = snap.val() || {};
+                const sttState = status.stt_state || '';
+                const val = status.stt_layout;
+
+                // stt_state에 따라 UI 전환
+                if (sttState === 'extracting') {
+                    showVoiceState('processing');
+                }
+
                 if (val && Array.isArray(val) && val.length === 9) {
                     clearInterval(voicePollingTimer);
                     voicePollingTimer = null;
                     voiceLayout = val;
                     showVoiceResult(val);
+                } else if (sttState === 'error') {
+                    clearInterval(voicePollingTimer);
+                    voicePollingTimer = null;
+                    showVoiceError('음성 인식에 실패했습니다.\n다시 시도해 주세요.');
+                    document.getElementById('voice-record-btn').style.display = 'block';
+                    document.getElementById('voice-record-btn').innerText = '🎙️ 다시 녹음';
                 } else if (attempts >= maxAttempts) {
                     clearInterval(voicePollingTimer);
                     voicePollingTimer = null;
@@ -1645,6 +1756,55 @@
         showCustomPatternPreview(voiceValues);
 
         if (!timerInterval) startTimer();
+    }
+
+    /* ── 시멘트 모달 STT 상태 UI 업데이트 ── */
+    let _cementCalibTimer = null;
+    let _lastSttMicState  = '';
+
+    function updateCementSttUI(phase, micState) {
+        // phase: 'pick' | 'cement'
+        const states = ['idle', 'tts_speaking', 'calibrating', 'listening', 'retry'];
+        states.forEach(s => {
+            const el = document.getElementById(`cement-stt-${phase}-${s}`);
+            if (el) el.style.display = 'none';
+        });
+
+        const show = (s) => {
+            const el = document.getElementById(`cement-stt-${phase}-${s}`);
+            if (el) el.style.display = 'flex';
+        };
+
+        // 상태 전환 시에만 캘리브레이션 애니메이션 재시작
+        if (micState === 'calibrating' && _lastSttMicState !== 'calibrating') {
+            startCementCalibAnim(phase);
+        } else if (micState !== 'calibrating') {
+            stopCementCalibAnim();
+        }
+        _lastSttMicState = micState;
+
+        if      (micState === 'tts_speaking') show('tts_speaking');
+        else if (micState === 'calibrating')  show('calibrating');
+        else if (micState === 'listening')    show('listening');
+        else if (micState === 'retry')        show('retry');
+        else                                  show('idle');
+    }
+
+    function startCementCalibAnim(phase) {
+        stopCementCalibAnim();
+        const bar = document.getElementById(`cement-calib-bar-${phase}`);
+        if (!bar) return;
+        bar.style.width = '0%';
+        let pct = 0;
+        _cementCalibTimer = setInterval(() => {
+            pct = Math.min(100, pct + 5);   // ~1초에 100% (20 steps × 50ms)
+            bar.style.width = pct + '%';
+            if (pct >= 100) stopCementCalibAnim();
+        }, 50);
+    }
+
+    function stopCementCalibAnim() {
+        if (_cementCalibTimer) { clearInterval(_cementCalibTimer); _cementCalibTimer = null; }
     }
 
     /* ── Role Switcher ── */

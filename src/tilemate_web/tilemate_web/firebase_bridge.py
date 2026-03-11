@@ -703,7 +703,7 @@ class FirebaseBridgeNode(Node):
         - 웹 팝업: waiting_cement
         - TTS: "시멘트를 발라주세요"
         - STT: "시멘트 다 발랐어" 계열 감지
-        - TTS: "타일을 주세요"
+        - TTS: "타일을 두세요"
         - → ROS publish: /dsr01/cowork/cement_done (Bool true)
         """
         try:
@@ -746,7 +746,7 @@ class FirebaseBridgeNode(Node):
                         time.sleep(1.0)
 
             self.ref.update({"stt_mic_state": "tts_speaking"})
-            self._speak("타일을 주세요")
+            self._speak("타일을 두세요")
             time.sleep(0.5)
 
             msg_cement = Bool()

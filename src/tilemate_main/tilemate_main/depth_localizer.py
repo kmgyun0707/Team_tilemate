@@ -106,7 +106,20 @@ class DepthLocalizer:
         z = float(depth_mm)
 
         return np.array([x, y, z], dtype=np.float64)
+    def transform_camera_points_to_base(self, camera_points, robot_posx):
+        """
+        camera_points: (N, 3)
+        return: (N, 3)
+        """
+        if camera_points is None or len(camera_points) == 0:
+            return np.empty((0, 3), dtype=np.float64)
 
+        base_points = []
+        for p in camera_points:
+            bp = self.transform_camera_to_base(p, robot_posx)
+            base_points.append(bp)
+
+        return np.asarray(base_points, dtype=np.float64)
     def transform_camera_to_base(self, camera_point, robot_posx):
         """
         camera_point(mm) -> base_point(mm)

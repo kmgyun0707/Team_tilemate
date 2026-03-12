@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
 import time
+import json
+import asyncio
+import threading
+
 import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
+from custom_tile_msgs.msg import TileArray
 
 from tilemate_main.depth_localizer import DepthLocalizer
-import json
-from std_msgs.msg import String
-import json
-import asyncio
-import threading
-import websockets
-
-
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 
 class WallTileInspection3DNode(Node):
     def __init__(self):
         super().__init__("wall_tile_inspection_3d_node")
 
+        # --------------------------------------------------
+        # parameters
+        # --------------------------------------------------
         self.declare_parameter("gripper2cam_path", "")
         self.declare_parameter("use_inverse", True)
 
@@ -26,168 +29,81 @@ class WallTileInspection3DNode(Node):
         self.declare_parameter("max_mm", 3000)
         self.declare_parameter("wait_timeout_sec", 5.0)
 
-        # n-point plane fitting
-        self.declare_parameter("sample_n_points", 25)
+        self.declare_parameter("sample_n_points", 50)
         self.declare_parameter("sample_margin_px", 10)
         self.declare_parameter("depth_kernel_size", 5)
         self.declare_parameter("depth_inlier_thresh_mm", 80.0)
 
-        # residual map
         self.declare_parameter("residual_clim_mm", 15.0)
         self.declare_parameter("residual_stride", 2)
 
-        self.window_name = "Wall/Tile ROI Selector (3D Plane)"
-        self.dragging = False
-        self.pt1 = None
-        self.pt2 = None
+        # RGB -> Depth scaling
+        self.declare_parameter("rgb_width", 640)
+        self.declare_parameter("rgb_height", 360)
+        self.declare_parameter("depth_width", 848)
+        self.declare_parameter("depth_height", 480)
 
-        self.mode = "tile"   # wall -> tile
-        self.wall_roi = (248, 87, 597, 360)
-        self.tile_rois = []
+        # wall ROI: depth 기준 고정 ROI
+        self.declare_parameter("wall_roi_depth", [200, 50, 650, 400])
+
+        # yolo roi margin
+        self.declare_parameter("tile_margin_px_depth", -10)
+
+        self.window_name = "Wall/Tile ROI Preview (Auto from YOLO)"
+        self.result_window_name = "Wall Tile Inspection 3D Result"
 
         gripper2cam_path = self.get_parameter("gripper2cam_path").get_parameter_value().string_value
         use_inverse = self.get_parameter("use_inverse").get_parameter_value().bool_value
+
+        self.rgb_width = int(self.get_parameter("rgb_width").value)
+        self.rgb_height = int(self.get_parameter("rgb_height").value)
+        self.depth_width = int(self.get_parameter("depth_width").value)
+        self.depth_height = int(self.get_parameter("depth_height").value)
+
+        # self.scale_x = float(self.depth_width) / float(self.rgb_width)
+        # self.scale_y = float(self.depth_height) / float(self.rgb_height)
+        self.scale_x = 1.0
+        self.scale_y = 1.0
+        self.wall_roi = tuple(int(v) for v in self.get_parameter("wall_roi_depth").value)
+        self.tile_margin_px_depth = int(self.get_parameter("tile_margin_px_depth").value)
 
         self.localizer = DepthLocalizer(
             node=self,
             gripper2cam_path=gripper2cam_path,
             use_inverse=use_inverse
         )
-        self._ws_clients = set()
-        self._ws_loop = None
-        self._ws_thread = None
-        self._start_websocket_server()
-        self.web_viz_pub = self.create_publisher(String, "/wall_tile_inspection/web_viz", 10)
+        self.bridge = CvBridge()
+        self.latest_annotated_image = None
+        self.latest_annotated_stamp = None
+
+        self.annotated_image_sub = self.create_subscription(
+            Image,
+            "/yolo/annotated_image",
+            self.annotated_image_callback,
+            10,
+        )
+        self.latest_tile_array = None
+        self.latest_tile_stamp = None
+        self.tile_regions = []
+
+        self.tile_array_sub = self.create_subscription(
+            TileArray,
+            "/yolo/tile_array",
+            self.tile_array_callback,
+            10,
+        )
+
+        self.get_logger().info(
+            f"[WallTileInspection3DNode] RGB({self.rgb_width}x{self.rgb_height}) "
+            f"-> DEPTH({self.depth_width}x{self.depth_height}) "
+            f"scale_x={self.scale_x:.4f}, scale_y={self.scale_y:.4f}"
+        )
+        self.get_logger().info(f"[WallTileInspection3DNode] wall_roi(depth)={self.wall_roi}")
         self.get_logger().info("[WallTileInspection3DNode] initialized")
 
     # --------------------------------------------------
-    # ready
+    # ready / callbacks
     # --------------------------------------------------
-
-    def _start_websocket_server(self, host="0.0.0.0", port=8765):
-        def run_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self._ws_loop = loop
-
-            async def handler(websocket):
-                self.get_logger().info("[WebSocket] client connected")
-                self._ws_clients.add(websocket)
-                try:
-                    await websocket.wait_closed()
-                finally:
-                    self._ws_clients.discard(websocket)
-                    self.get_logger().info("[WebSocket] client disconnected")
-
-            async def start_server():
-                server = await websockets.serve(handler, host, port)
-                self.get_logger().info(f"[WebSocket] serving on ws://{host}:{port}")
-                await server.wait_closed()
-
-            loop.run_until_complete(start_server())
-
-        self._ws_thread = threading.Thread(target=run_loop, daemon=True)
-        self._ws_thread.start()
-
-    async def _broadcast_ws(self, payload_str):
-        dead = []
-        for ws in list(self._ws_clients):
-            try:
-                await ws.send(payload_str)
-            except Exception:
-                dead.append(ws)
-
-        for ws in dead:
-            self._ws_clients.discard(ws)
-
-    def publish_web_viz_direct(self, wall_analysis, tile_analyses):
-        payload = {
-            "frame_id": "camera_color_optical_frame",
-            "timestamp_sec": float(time.time()),
-            "wall": self.analysis_to_web_plane(
-                wall_analysis,
-                color_rgb=[1.0, 0.9, 0.1],
-            ),
-            "tiles": [
-                self.analysis_to_web_plane(t, color_rgb=[0.1, 1.0, 0.2])
-                for t in tile_analyses
-            ],
-        }
-
-        payload_str = json.dumps(payload)
-
-        if self._ws_loop is not None:
-            asyncio.run_coroutine_threadsafe(
-                self._broadcast_ws(payload_str),
-                self._ws_loop
-            )
-            self.get_logger().info("[WallTileInspection3DNode] broadcasted result to websocket clients")
-
-    def mm_to_m_list(self, p):
-        return [float(p[0]) / 1000.0, float(p[1]) / 1000.0, float(p[2]) / 1000.0]
-
-    def flatten_patch_to_vertices_indices(self, X, Y, Z):
-        h, w = X.shape
-        vertices = []
-        for r in range(h):
-            for c in range(w):
-                vertices.append([
-                    float(X[r, c]) / 1000.0,
-                    float(Y[r, c]) / 1000.0,
-                    float(Z[r, c]) / 1000.0,
-                ])
-
-        indices = []
-        for r in range(h - 1):
-            for c in range(w - 1):
-                i00 = r * w + c
-                i01 = r * w + (c + 1)
-                i10 = (r + 1) * w + c
-                i11 = (r + 1) * w + (c + 1)
-
-                indices.extend([i00, i10, i11])
-                indices.extend([i00, i11, i01])
-
-        return vertices, indices
-
-    def analysis_to_web_plane(self, analysis, color_rgb):
-        X, Y, Z = self.build_roi_plane_patch_from_points(
-            points_xyz=analysis["sample_points_xyz"],
-            centroid=analysis["plane_centroid"],
-            normal=analysis["plane_normal"],
-            resolution=12,
-            margin_mm=0.0,
-        )
-
-        patch_vertices, patch_indices = self.flatten_patch_to_vertices_indices(X, Y, Z)
-
-        sample_points = [self.mm_to_m_list(p) for p in analysis["sample_points_xyz"]]
-        centroid = self.mm_to_m_list(analysis["plane_centroid"])
-
-        center_point = None
-        if analysis["center_point"] is not None:
-            center_point = self.mm_to_m_list(analysis["center_point"])
-
-        return {
-            "name": analysis["name"],
-            "roi": [int(v) for v in analysis["roi"]],
-            "sample_points": sample_points,
-            "centroid": centroid,
-            "normal": [
-                float(analysis["plane_normal"][0]),
-                float(analysis["plane_normal"][1]),
-                float(analysis["plane_normal"][2]),
-            ],
-            "center_point": center_point,
-            "patch_vertices": patch_vertices,
-            "patch_indices": patch_indices,
-            "rmse_mm": float(analysis["rmse"]),
-            "roll_deg": float(analysis["roll_deg"]),
-            "pitch_deg": float(analysis["pitch_deg"]),
-            "yaw_deg": float(analysis["yaw_deg"]),
-            "color": [float(color_rgb[0]), float(color_rgb[1]), float(color_rgb[2])],
-        }
-  
     def wait_until_ready(self, timeout_sec=5.0):
         start = time.time()
         while rclpy.ok():
@@ -199,115 +115,131 @@ class WallTileInspection3DNode(Node):
                 self.get_logger().warn("[WallTileInspection3DNode] timeout waiting for depth/camera_info")
                 return False
         return False
+    def annotated_image_callback(self, msg: Image):
+        try:
+            self.latest_annotated_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            self.latest_annotated_stamp = time.time()
+        except Exception as e:
+            self.get_logger().warn(f"[WallTileInspection3DNode] annotated_image_callback failed: {e}")
+    def tile_array_callback(self, msg: TileArray):
+        self.latest_tile_array = msg
+        self.latest_tile_stamp = time.time()
+
+    def wait_for_tile_array(self, timeout_sec=5.0):
+        start = time.time()
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self.latest_tile_array is not None and len(self.latest_tile_array.tiles) > 0:
+                self.get_logger().info(
+                    f"[WallTileInspection3DNode] yolo tile array ready: {len(self.latest_tile_array.tiles)} tiles"
+                )
+                return True
+            if time.time() - start > timeout_sec:
+                self.get_logger().warn("[WallTileInspection3DNode] timeout waiting for /yolo/tile_array")
+                return False
+        return False
 
     # --------------------------------------------------
-    # ROI helpers
+    # coordinate helpers
     # --------------------------------------------------
-    def mm_to_m_list(self, p):
-        return [float(p[0]) / 1000.0, float(p[1]) / 1000.0, float(p[2]) / 1000.0]
 
-    def flatten_patch_to_vertices_indices(self, X, Y, Z):
-        """
-        meshgrid 형태의 X,Y,Z를 Three.js용 vertices / indices로 변환
-        return:
-            vertices: [[x,y,z], ...]  (meter)
-            indices:  [i0,i1,i2, ...]
-        """
-        h, w = X.shape
-        vertices = []
-        for r in range(h):
-            for c in range(w):
-                vertices.append([
-                    float(X[r, c]) / 1000.0,
-                    float(Y[r, c]) / 1000.0,
-                    float(Z[r, c]) / 1000.0,
-                ])
+    def yolo_image_callback(self, msg: Image):
+        try:
+            if msg.encoding.lower() in ["bgr8", "rgb8"]:
+                img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            else:
+                img = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
-        indices = []
-        for r in range(h - 1):
-            for c in range(w - 1):
-                i00 = r * w + c
-                i01 = r * w + (c + 1)
-                i10 = (r + 1) * w + c
-                i11 = (r + 1) * w + (c + 1)
+            self.latest_yolo_image = img
+            self.latest_yolo_stamp = time.time()
+        except Exception as e:
+            self.get_logger().warn(f"[WallTileInspection3DNode] yolo_image_callback failed: {e}")
+    def wait_for_yolo_image(self, timeout_sec=5.0):
+        start = time.time()
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self.latest_yolo_image is not None:
+                self.get_logger().info("[WallTileInspection3DNode] yolo debug image ready")
+                return True
+            if time.time() - start > timeout_sec:
+                self.get_logger().warn("[WallTileInspection3DNode] timeout waiting for yolo debug image")
+                return False
+        return False
+    def compose_yolo_depth_side_by_side(self, wall_region, tile_regions, min_mm, max_mm, out_h=480):
+        if self.latest_yolo_image is None or self.localizer.depth_image is None:
+            return None
 
-                # tri 1
-                indices.extend([i00, i10, i11])
-                # tri 2
-                indices.extend([i00, i11, i01])
+        # -----------------------------
+        # left: YOLO detection overlay
+        # -----------------------------
+        yolo_vis = self.latest_yolo_image.copy()
 
-        return vertices, indices
+        # YOLO 이미지 위에 중심점 정도만 추가로 찍어도 디버깅에 도움됨
+        for item in tile_regions:
+            cx_rgb = int(round(item["rgb_center"][0]))
+            cy_rgb = int(round(item["rgb_center"][1]))
+            cv2.circle(yolo_vis, (cx_rgb, cy_rgb), 4, (0, 255, 255), -1)
+            cv2.putText(
+                yolo_vis, item["name"],
+                (cx_rgb + 5, max(20, cy_rgb - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2
+            )
 
-    def analysis_to_web_plane(self, analysis, color_rgb):
-        """
-        하나의 분석 결과를 웹용 dict로 변환
-        """
-        X, Y, Z = self.build_roi_plane_patch_from_points(
-            points_xyz=analysis["sample_points_xyz"],
-            centroid=analysis["plane_centroid"],
-            normal=analysis["plane_normal"],
-            resolution=12,
-            margin_mm=0.0,
+        # -----------------------------
+        # right: Depth map + depth ROI
+        # -----------------------------
+        depth_vis = self.depth_to_colormap(self.localizer.depth_image, min_mm, max_mm)
+
+        self.draw_region(depth_vis, wall_region, (0, 255, 255), thickness=2, label="WALL")
+        for item in tile_regions:
+            self.draw_region(depth_vis, item, (0, 255, 0), thickness=2, label=item["name"])
+
+            # bbox도 같이 그리면 변환 상태 디버깅 쉬움
+            u1, v1, u2, v2 = item["roi"]
+            cv2.rectangle(depth_vis, (u1, v1), (u2, v2), (0, 0, 255), 1)
+
+        # -----------------------------
+        # same display height
+        # -----------------------------
+        yh, yw = yolo_vis.shape[:2]
+        dh, dw = depth_vis.shape[:2]
+
+        yolo_w = int(round(yw * (out_h / float(yh))))
+        depth_w = int(round(dw * (out_h / float(dh))))
+
+        yolo_vis = cv2.resize(yolo_vis, (yolo_w, out_h))
+        depth_vis = cv2.resize(depth_vis, (depth_w, out_h))
+
+        # header text
+        cv2.putText(
+            yolo_vis, "YOLO Detection Result", (10, 28),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2
+        )
+        cv2.putText(
+            depth_vis, "Depth Map + Depth ROI", (10, 28),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2
         )
 
-        patch_vertices, patch_indices = self.flatten_patch_to_vertices_indices(X, Y, Z)
+        side = np.hstack([yolo_vis, depth_vis])
+        return side
+    def rgb_to_depth_uv(self, u_rgb, v_rgb):
+        u_depth = float(u_rgb) * self.scale_x
+        v_depth = float(v_rgb) * self.scale_y
+        return u_depth, v_depth
 
-        sample_points = [
-            self.mm_to_m_list(p) for p in analysis["sample_points_xyz"]
-        ]
+    def rgb_wh_to_depth_wh(self, w_rgb, h_rgb):
+        w_depth = float(w_rgb) * self.scale_x
+        h_depth = float(h_rgb) * self.scale_y
+        return w_depth, h_depth
 
-        centroid = self.mm_to_m_list(analysis["plane_centroid"])
-        normal = [
-            float(analysis["plane_normal"][0]),
-            float(analysis["plane_normal"][1]),
-            float(analysis["plane_normal"][2]),
-        ]
+    def clamp_point(self, u, v):
+        if self.localizer.depth_image is None:
+            raise RuntimeError("depth_image is None")
+        h, w = self.localizer.depth_image.shape
+        u = max(0.0, min(float(w - 1), float(u)))
+        v = max(0.0, min(float(h - 1), float(v)))
+        return u, v
 
-        center_point = None
-        if analysis["center_point"] is not None:
-            center_point = self.mm_to_m_list(analysis["center_point"])
-
-        return {
-            "name": analysis["name"],
-            "roi": [int(v) for v in analysis["roi"]],
-            "sample_points": sample_points,
-            "centroid": centroid,
-            "normal": normal,
-            "center_point": center_point,
-            "patch_vertices": patch_vertices,
-            "patch_indices": patch_indices,
-            "rmse_mm": float(analysis["rmse"]),
-            "res_mean_mm": float(analysis["res_mean"]),
-            "res_min_mm": float(analysis["res_min"]),
-            "res_max_mm": float(analysis["res_max"]),
-            "roll_deg": float(analysis["roll_deg"]),
-            "pitch_deg": float(analysis["pitch_deg"]),
-            "yaw_deg": float(analysis["yaw_deg"]),
-            "color": [float(color_rgb[0]), float(color_rgb[1]), float(color_rgb[2])],
-        }
-
-    def publish_web_viz(self, wall_analysis, tile_analyses):
-        """
-        웹에서 바로 Three.js로 렌더 가능한 JSON publish
-        """
-        msg = String()
-
-        payload = {
-            "frame_id": "camera_color_optical_frame",
-            "timestamp_sec": float(time.time()),
-            "wall": self.analysis_to_web_plane(
-                wall_analysis,
-                color_rgb=[1.0, 0.9, 0.1],
-            ),
-            "tiles": [
-                self.analysis_to_web_plane(t, color_rgb=[0.1, 1.0, 0.2])
-                for t in tile_analyses
-            ],
-        }
-
-        msg.data = json.dumps(payload)
-        self.web_viz_pub.publish(msg)
-        self.get_logger().info("[WallTileInspection3DNode] published /wall_tile_inspection/web_viz")
     def clamp_roi(self, u1, v1, u2, v2):
         if self.localizer.depth_image is None:
             raise RuntimeError("depth_image is None")
@@ -329,10 +261,168 @@ class WallTileInspection3DNode(Node):
         vc = int(round((v1 + v2) * 0.5))
         return uc, vc
 
+    def mm_to_m_list(self, p):
+        return [float(p[0]) / 1000.0, float(p[1]) / 1000.0, float(p[2]) / 1000.0]
+
+    # --------------------------------------------------
+    # rotated region helpers
+    # --------------------------------------------------
+    def create_wall_region(self):
+        u1, v1, u2, v2 = self.clamp_roi(*self.wall_roi)
+        cx = 0.5 * (u1 + u2)
+        cy = 0.5 * (v1 + v2)
+        w = float(u2 - u1)
+        h = float(v2 - v1)
+
+        return {
+            "name": "wall",
+            "type": "axis_aligned",
+            "roi": (u1, v1, u2, v2),
+            "center_uv": (cx, cy),
+            "size_uv": (w, h),
+            "theta_rad": 0.0,
+            "theta_deg": 0.0,
+            "conf_score": 1.0,
+        }
+
+    def create_tile_region_from_msg(self, tile, index, margin_px=0):
+        cx_rgb = float(tile.pose.x)
+        cy_rgb = float(tile.pose.y)
+        w_rgb = float(tile.width)
+        h_rgb = float(tile.height)
+        theta_rad = float(tile.pose.theta)
+
+        # 중심만 depth 좌표계로 이동
+        cx_depth, cy_depth = self.rgb_to_depth_uv(cx_rgb, cy_rgb)
+
+        # 크기는 rgb 기준 그대로 사용
+        w_depth = float(w_rgb)
+        h_depth = float(h_rgb)
+
+        w_depth += 2.0 * float(margin_px)
+        h_depth += 2.0 * float(margin_px)
+
+        cx_depth, cy_depth = self.clamp_point(cx_depth, cy_depth)
+
+        name = tile.pattern_name.strip() if tile.pattern_name.strip() else f"tile_{index + 1}"
+
+        box = cv2.boxPoints(((cx_depth, cy_depth), (w_depth, h_depth), np.degrees(theta_rad)))
+        bbox_u1 = int(np.floor(np.min(box[:, 0])))
+        bbox_v1 = int(np.floor(np.min(box[:, 1])))
+        bbox_u2 = int(np.ceil(np.max(box[:, 0])))
+        bbox_v2 = int(np.ceil(np.max(box[:, 1])))
+        bbox = self.clamp_roi(bbox_u1, bbox_v1, bbox_u2, bbox_v2)
+        self.get_logger().info(
+            f"[ROI DEBUG] rgb center=({cx_rgb:.2f},{cy_rgb:.2f}) size=({w_rgb:.2f},{h_rgb:.2f}) "
+            f"-> depth center=({cx_depth:.2f},{cy_depth:.2f}) size=({w_depth:.2f},{h_depth:.2f})"
+        )
+        return {
+            "name": name,
+            "type": "rotated_rect",
+            "roi": bbox,
+            "center_uv": (cx_depth, cy_depth),
+            "size_uv": (w_depth, h_depth),
+            "theta_rad": theta_rad,
+            "theta_deg": float(np.degrees(theta_rad)),
+            "rgb_center": (cx_rgb, cy_rgb),
+            "rgb_size": (w_rgb, h_rgb),
+            "conf_score": float(tile.conf_score),
+        }
+
+    def build_tile_regions_from_yolo(self, margin_px=0):
+        if self.latest_tile_array is None:
+            return []
+
+        regions = []
+        for i, tile in enumerate(self.latest_tile_array.tiles):
+            try:
+                region = self.create_tile_region_from_msg(tile, i, margin_px=margin_px)
+                regions.append(region)
+            except Exception as e:
+                self.get_logger().warn(
+                    f"[WallTileInspection3DNode] failed to convert tile[{i}] to region: {e}"
+                )
+        return regions
+
+    def get_region_box_points(self, region):
+        cx, cy = region["center_uv"]
+        w, h = region["size_uv"]
+        angle_deg = region["theta_deg"]
+        pts = cv2.boxPoints(((float(cx), float(cy)), (float(w), float(h)), float(angle_deg)))
+        return np.asarray(pts, dtype=np.float32)
+
+    def point_in_region(self, u, v, region):
+        if region["type"] == "axis_aligned":
+            u1, v1, u2, v2 = region["roi"]
+            return (u1 <= u < u2) and (v1 <= v < v2)
+
+        pts = self.get_region_box_points(region)
+        inside = cv2.pointPolygonTest(pts, (float(u), float(v)), False)
+        return inside >= 0
+
+    def draw_region(self, image, region, color, thickness=2, label=None):
+        label = region["name"] if label is None else label
+
+        if region["type"] == "axis_aligned":
+            u1, v1, u2, v2 = region["roi"]
+            cv2.rectangle(image, (u1, v1), (u2, v2), color, thickness)
+            cv2.putText(
+                image, label, (u1, max(20, v1 - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2
+            )
+            return
+
+        pts = self.get_region_box_points(region).astype(np.int32)
+        cv2.polylines(image, [pts], isClosed=True, color=color, thickness=thickness)
+
+        cx, cy = region["center_uv"]
+        tip_len = min(region["size_uv"]) * 0.35
+        dx = np.cos(region["theta_rad"]) * tip_len
+        dy = np.sin(region["theta_rad"]) * tip_len
+
+        p0 = (int(round(cx)), int(round(cy)))
+        p1 = (int(round(cx + dx)), int(round(cy + dy)))
+        cv2.arrowedLine(image, p0, p1, color, 2, tipLength=0.25)
+
+        text_pt = tuple(pts[0])
+        cv2.putText(
+            image, label, (int(text_pt[0]), max(20, int(text_pt[1]) - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
+        )
+
+    # --------------------------------------------------
+    # auto ROI preview
+    # --------------------------------------------------
+    def preview_regions(self, wall_region, tile_regions, min_mm, max_mm):
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.01)
+
+            if self.localizer.depth_image is None:
+                continue
+
+            vis = self.depth_to_colormap(self.localizer.depth_image, min_mm, max_mm)
+
+            self.draw_region(vis, wall_region, (0, 255, 255), thickness=2, label="WALL")
+            for item in tile_regions:
+                self.draw_region(vis, item, (0, 255, 0), thickness=2, label=item["name"])
+
+            help1 = "AUTO ROI from /yolo/tile_array | c/ENTER: continue | q/ESC: cancel"
+            help2 = "wall: depth ROI fixed | tile: rgb->depth scaled + rotated"
+            cv2.putText(vis, help1, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
+            cv2.putText(vis, help2, (10, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
+
+            cv2.imshow(self.window_name, vis)
+            key = cv2.waitKey(30) & 0xFF
+            if key in [ord('c'), 13]:
+                return True
+            if key in [ord('q'), 27]:
+                return False
+
+        return False
+
     # --------------------------------------------------
     # visualization helpers
     # --------------------------------------------------
-
     def depth_to_colormap(self, depth_image, min_mm, max_mm):
         depth = depth_image.astype(np.float32)
         vis = np.zeros_like(depth, dtype=np.uint8)
@@ -364,14 +454,7 @@ class WallTileInspection3DNode(Node):
     # --------------------------------------------------
     # orientation helpers
     # --------------------------------------------------
-
     def plane_rotation_from_normal(self, normal):
-        """
-        plane z-axis = normal
-        plane x-axis = camera x-axis projected onto plane
-        plane y-axis = z x x
-        return R (3x3), columns=[x_axis, y_axis, z_axis]
-        """
         z_axis = np.asarray(normal, dtype=np.float64)
         z_axis = z_axis / np.linalg.norm(z_axis)
 
@@ -388,7 +471,6 @@ class WallTileInspection3DNode(Node):
         y_axis = np.cross(z_axis, x_axis)
         y_axis = y_axis / np.linalg.norm(y_axis)
 
-        # re-orthogonalize
         x_axis = np.cross(y_axis, z_axis)
         x_axis = x_axis / np.linalg.norm(x_axis)
 
@@ -396,10 +478,6 @@ class WallTileInspection3DNode(Node):
         return R
 
     def rotation_matrix_to_rpy_deg(self, R):
-        """
-        ZYX convention
-        returns roll(x), pitch(y), yaw(z) in degrees
-        """
         R = np.asarray(R, dtype=np.float64)
 
         sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
@@ -414,11 +492,7 @@ class WallTileInspection3DNode(Node):
             pitch = np.arctan2(-R[2, 0], sy)
             yaw = 0.0
 
-        return (
-            float(np.degrees(roll)),
-            float(np.degrees(pitch)),
-            float(np.degrees(yaw)),
-        )
+        return float(np.degrees(roll)), float(np.degrees(pitch)), float(np.degrees(yaw))
 
     def plane_normal_to_rpy_deg(self, normal):
         R = self.plane_rotation_from_normal(normal)
@@ -426,47 +500,8 @@ class WallTileInspection3DNode(Node):
         return roll, pitch, yaw, R
 
     # --------------------------------------------------
-    # 3D plane helpers
+    # 3D helpers
     # --------------------------------------------------
-
-    def sample_n_points_in_roi(self, roi, n_points=25, margin=10):
-        """
-        ROI 내부에서 균등 격자 기반 샘플점 생성
-        """
-        u1, v1, u2, v2 = self.clamp_roi(*roi)
-
-        w = u2 - u1
-        h = v2 - v1
-
-        if w <= 2 * margin:
-            margin = 0
-        if h <= 2 * margin:
-            margin = 0
-
-        uu1 = u1 + margin
-        uu2 = u2 - margin
-        vv1 = v1 + margin
-        vv2 = v2 - margin
-
-        if uu2 <= uu1 or vv2 <= vv1:
-            uu1, uu2 = u1, u2
-            vv1, vv2 = v1, v2
-
-        grid_n = int(np.ceil(np.sqrt(max(4, n_points))))
-        us = np.linspace(uu1, uu2 - 1, grid_n).astype(int)
-        vs = np.linspace(vv1, vv2 - 1, grid_n).astype(int)
-
-        pts = []
-        for v in vs:
-            for u in us:
-                pts.append((int(u), int(v)))
-
-        if len(pts) > n_points:
-            idx = np.linspace(0, len(pts) - 1, n_points).astype(int)
-            pts = [pts[i] for i in idx]
-
-        return pts
-
     def pixel_to_camera_point_filtered(
         self,
         u,
@@ -477,8 +512,8 @@ class WallTileInspection3DNode(Node):
         inlier_thresh_mm=80.0,
     ):
         depth_mm = self.localizer.get_filtered_depth_at(
-            u=u,
-            v=v,
+            u=int(u),
+            v=int(v),
             kernel_size=kernel_size,
             min_mm=min_mm,
             max_mm=max_mm,
@@ -487,15 +522,10 @@ class WallTileInspection3DNode(Node):
         if depth_mm is None:
             return None, None
 
-        p = self.localizer.pixel_to_camera_3d(u, v, depth_mm)
+        p = self.localizer.pixel_to_camera_3d(int(u), int(v), depth_mm)
         return p, float(depth_mm)
 
     def fit_plane_from_points_svd(self, points_xyz):
-        """
-        points_xyz: (N,3)
-        return: normal(unit), d, centroid
-        plane: n·x + d = 0
-        """
         if points_xyz is None or len(points_xyz) < 3:
             return None
 
@@ -512,7 +542,6 @@ class WallTileInspection3DNode(Node):
         normal = normal / norm
         d = -float(np.dot(normal, centroid))
 
-        # camera +Z 방향 기준 정리
         if normal[2] < 0:
             normal = -normal
             d = -d
@@ -528,12 +557,78 @@ class WallTileInspection3DNode(Node):
         return float(np.degrees(np.arccos(dot)))
 
     # --------------------------------------------------
-    # ROI -> 3D analysis
+    # region sampling / analysis
     # --------------------------------------------------
+    def sample_n_points_in_region(self, region, n_points=25, margin=10):
+        if region["type"] == "axis_aligned":
+            u1, v1, u2, v2 = region["roi"]
+
+            w = u2 - u1
+            h = v2 - v1
+
+            if w <= 2 * margin:
+                margin = 0
+            if h <= 2 * margin:
+                margin = 0
+
+            uu1 = u1 + margin
+            uu2 = u2 - margin
+            vv1 = v1 + margin
+            vv2 = v2 - margin
+
+            if uu2 <= uu1 or vv2 <= vv1:
+                uu1, uu2 = u1, u2
+                vv1, vv2 = v1, v2
+
+            grid_n = int(np.ceil(np.sqrt(max(4, n_points))))
+            us = np.linspace(uu1, uu2 - 1, grid_n).astype(int)
+            vs = np.linspace(vv1, vv2 - 1, grid_n).astype(int)
+
+            pts = [(int(u), int(v)) for v in vs for u in us]
+            if len(pts) > n_points:
+                idx = np.linspace(0, len(pts) - 1, n_points).astype(int)
+                pts = [pts[i] for i in idx]
+            return pts
+
+        # rotated rect
+        cx, cy = region["center_uv"]
+        rw, rh = region["size_uv"]
+        theta = region["theta_rad"]
+
+        inner_w = max(2.0, rw - 2.0 * margin)
+        inner_h = max(2.0, rh - 2.0 * margin)
+
+        grid_n = int(np.ceil(np.sqrt(max(4, n_points))))
+        xs = np.linspace(-0.5 * inner_w, 0.5 * inner_w, grid_n)
+        ys = np.linspace(-0.5 * inner_h, 0.5 * inner_h, grid_n)
+
+        c = np.cos(theta)
+        s = np.sin(theta)
+
+        pts = []
+        for yy in ys:
+            for xx in xs:
+                u = cx + xx * c - yy * s
+                v = cy + xx * s + yy * c
+                u, v = self.clamp_point(u, v)
+                pts.append((int(round(u)), int(round(v))))
+
+        dedup = []
+        seen = set()
+        for p in pts:
+            if p not in seen and self.point_in_region(p[0], p[1], region):
+                seen.add(p)
+                dedup.append(p)
+
+        if len(dedup) > n_points:
+            idx = np.linspace(0, len(dedup) - 1, n_points).astype(int)
+            dedup = [dedup[i] for i in idx]
+
+        return dedup
 
     def get_plane_sample_points_camera(
         self,
-        roi,
+        region,
         n_points,
         margin,
         kernel_size,
@@ -541,8 +636,8 @@ class WallTileInspection3DNode(Node):
         max_mm,
         inlier_thresh_mm,
     ):
-        uv_samples = self.sample_n_points_in_roi(
-            roi=roi,
+        uv_samples = self.sample_n_points_in_region(
+            region=region,
             n_points=n_points,
             margin=margin,
         )
@@ -572,9 +667,9 @@ class WallTileInspection3DNode(Node):
 
         return np.asarray(points_xyz, dtype=np.float64), valid_uv, valid_depths
 
-    def compute_roi_plane_distance_map(
+    def compute_region_plane_distance_map(
         self,
-        roi,
+        region,
         normal,
         d,
         stride=2,
@@ -583,21 +678,21 @@ class WallTileInspection3DNode(Node):
         max_mm=5000,
         inlier_thresh_mm=80.0,
     ):
-        """
-        ROI 안의 각 유효 픽셀을 3D로 변환 후 plane까지 signed distance(mm) 계산
-        """
-        u1, v1, u2, v2 = self.clamp_roi(*roi)
+        u1, v1, u2, v2 = region["roi"]
 
         h = v2 - v1
         w = u2 - u1
 
         residual = np.full((h, w), np.nan, dtype=np.float64)
         valid_mask = np.zeros((h, w), dtype=bool)
-        roi_depth = np.full((h, w), np.nan, dtype=np.float64)
+        region_depth = np.full((h, w), np.nan, dtype=np.float64)
 
         step = max(1, int(stride))
         for vv in range(v1, v2, step):
             for uu in range(u1, u2, step):
+                if not self.point_in_region(uu, vv, region):
+                    continue
+
                 p, depth_mm = self.pixel_to_camera_point_filtered(
                     u=uu,
                     v=vv,
@@ -613,20 +708,21 @@ class WallTileInspection3DNode(Node):
                 rr = vv - v1
                 cc = uu - u1
                 residual[rr, cc] = dist
-                roi_depth[rr, cc] = depth_mm
+                region_depth[rr, cc] = depth_mm
                 valid_mask[rr, cc] = True
 
-        return roi_depth, residual, valid_mask
+        return region_depth, residual, valid_mask
 
     def get_center_point_camera(
         self,
-        roi,
+        region,
         kernel_size,
         min_mm,
         max_mm,
         inlier_thresh_mm,
     ):
-        uc, vc = self.roi_center_uv(roi)
+        uc = int(round(region["center_uv"][0]))
+        vc = int(round(region["center_uv"][1]))
         p, depth_mm = self.pixel_to_camera_point_filtered(
             u=uc,
             v=vc,
@@ -637,10 +733,9 @@ class WallTileInspection3DNode(Node):
         )
         return (uc, vc), p, depth_mm
 
-    def analyze_roi_3d(
+    def analyze_region_3d(
         self,
-        name,
-        roi,
+        region,
         n_points,
         margin,
         kernel_size,
@@ -650,7 +745,7 @@ class WallTileInspection3DNode(Node):
         residual_stride,
     ):
         points_xyz, sample_uv, sample_depths = self.get_plane_sample_points_camera(
-            roi=roi,
+            region=region,
             n_points=n_points,
             margin=margin,
             kernel_size=kernel_size,
@@ -668,8 +763,8 @@ class WallTileInspection3DNode(Node):
         normal, d, centroid = plane
         roll_deg, pitch_deg, yaw_deg, R_plane = self.plane_normal_to_rpy_deg(normal)
 
-        roi_depth, residual, valid_mask = self.compute_roi_plane_distance_map(
-            roi=roi,
+        region_depth, residual, valid_mask = self.compute_region_plane_distance_map(
+            region=region,
             normal=normal,
             d=d,
             stride=residual_stride,
@@ -692,7 +787,7 @@ class WallTileInspection3DNode(Node):
             res_max = float("nan")
 
         center_uv, center_point, center_depth = self.get_center_point_camera(
-            roi=roi,
+            region=region,
             kernel_size=kernel_size,
             min_mm=min_mm,
             max_mm=max_mm,
@@ -705,8 +800,9 @@ class WallTileInspection3DNode(Node):
             center_plane_dist = float("nan")
 
         return {
-            "name": name,
-            "roi": roi,
+            "name": region["name"],
+            "region": region,
+            "roi": region["roi"],
             "sample_points_xyz": points_xyz,
             "sample_uv": sample_uv,
             "sample_depths": sample_depths,
@@ -717,7 +813,7 @@ class WallTileInspection3DNode(Node):
             "roll_deg": roll_deg,
             "pitch_deg": pitch_deg,
             "yaw_deg": yaw_deg,
-            "roi_depth": roi_depth,
+            "roi_depth": region_depth,
             "residual": residual,
             "valid_mask": valid_mask,
             "valid_count": int(np.count_nonzero(valid_mask)),
@@ -732,140 +828,145 @@ class WallTileInspection3DNode(Node):
         }
 
     # --------------------------------------------------
-    # mouse callback
+    # web helpers
     # --------------------------------------------------
+    def flatten_patch_to_vertices_indices(self, X, Y, Z):
+        h, w = X.shape
+        vertices = []
+        for r in range(h):
+            for c in range(w):
+                vertices.append([
+                    float(X[r, c]) / 1000.0,
+                    float(Y[r, c]) / 1000.0,
+                    float(Z[r, c]) / 1000.0,
+                ])
 
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.dragging = True
-            self.pt1 = (x, y)
-            self.pt2 = (x, y)
+        indices = []
+        for r in range(h - 1):
+            for c in range(w - 1):
+                i00 = r * w + c
+                i01 = r * w + (c + 1)
+                i10 = (r + 1) * w + c
+                i11 = (r + 1) * w + (c + 1)
 
-        elif event == cv2.EVENT_MOUSEMOVE:
-            if self.dragging:
-                self.pt2 = (x, y)
+                indices.extend([i00, i10, i11])
+                indices.extend([i00, i11, i01])
 
-        elif event == cv2.EVENT_LBUTTONUP:
-            self.dragging = False
-            self.pt2 = (x, y)
+        return vertices, indices
 
-    # --------------------------------------------------
-    # ROI selection UI
-    # --------------------------------------------------
+    def build_plane_axes_from_normal(self, normal):
+        z_axis = np.asarray(normal, dtype=np.float64)
+        z_axis = z_axis / np.linalg.norm(z_axis)
 
-    def select_rois(self, min_mm, max_mm):
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback(self.window_name, self.mouse_callback)
+        ref_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        x_axis = ref_x - np.dot(ref_x, z_axis) * z_axis
 
-        self.get_logger().info(
-            "[WallTileInspection3DNode] "
-            "벽 ROI는 고정됨\n"
-            "타일 ROI들을 하나씩 선택 후 ENTER\n"
-            "콘솔에서 이름 입력\n"
-            "등록 끝나면 c 눌러 계산\n"
-            "r=tile reset, q=quit"
+        if np.linalg.norm(x_axis) < 1e-8:
+            ref_x = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            x_axis = ref_x - np.dot(ref_x, z_axis) * z_axis
+
+        x_axis = x_axis / np.linalg.norm(x_axis)
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis = y_axis / np.linalg.norm(y_axis)
+
+        x_axis = np.cross(y_axis, z_axis)
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        return x_axis, y_axis, z_axis
+
+    def build_roi_plane_patch_from_points(self, points_xyz, centroid, normal, resolution=10, margin_mm=0.0):
+        pts = np.asarray(points_xyz, dtype=np.float64)
+        centroid = np.asarray(centroid, dtype=np.float64)
+
+        x_axis, y_axis, _ = self.build_plane_axes_from_normal(normal)
+
+        rel = pts - centroid[None, :]
+        xs = rel @ x_axis
+        ys = rel @ y_axis
+
+        xmin = float(np.min(xs)) - margin_mm
+        xmax = float(np.max(xs)) + margin_mm
+        ymin = float(np.min(ys)) - margin_mm
+        ymax = float(np.max(ys)) + margin_mm
+
+        uu = np.linspace(xmin, xmax, resolution)
+        vv = np.linspace(ymin, ymax, resolution)
+        U, V = np.meshgrid(uu, vv)
+
+        patch = (
+            centroid[None, None, :]
+            + U[..., None] * x_axis[None, None, :]
+            + V[..., None] * y_axis[None, None, :]
         )
 
-        while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.01)
+        X = patch[..., 0]
+        Y = patch[..., 1]
+        Z = patch[..., 2]
+        return X, Y, Z
 
-            if self.localizer.depth_image is None:
-                blank = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(blank, "Waiting for depth image...", (30, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
-                cv2.imshow(self.window_name, blank)
-                key = cv2.waitKey(10) & 0xFF
-                if key == ord('q'):
-                    return False
-                continue
+    def analysis_to_web_plane(self, analysis, color_rgb):
+        X, Y, Z = self.build_roi_plane_patch_from_points(
+            points_xyz=analysis["sample_points_xyz"],
+            centroid=analysis["plane_centroid"],
+            normal=analysis["plane_normal"],
+            resolution=12,
+            margin_mm=0.0,
+        )
 
-            vis = self.depth_to_colormap(self.localizer.depth_image, min_mm, max_mm)
+        patch_vertices, patch_indices = self.flatten_patch_to_vertices_indices(X, Y, Z)
+        sample_points = [self.mm_to_m_list(p) for p in analysis["sample_points_xyz"]]
+        centroid = self.mm_to_m_list(analysis["plane_centroid"])
 
-            # 고정 wall ROI 표시
-            if self.wall_roi is not None:
-                u1, v1, u2, v2 = self.wall_roi
-                cv2.rectangle(vis, (u1, v1), (u2, v2), (0, 255, 255), 2)
-                cv2.putText(vis, "WALL(FIXED)", (u1, max(20, v1 - 5)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        center_point = None
+        if analysis["center_point"] is not None:
+            center_point = self.mm_to_m_list(analysis["center_point"])
 
-            # 등록된 tile ROI 표시
-            for item in self.tile_rois:
-                u1, v1, u2, v2 = item["roi"]
-                name = item["name"]
-                cv2.rectangle(vis, (u1, v1), (u2, v2), (0, 255, 0), 2)
-                cv2.putText(vis, name, (u1, max(20, v1 - 5)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+        region = analysis["region"]
+        region_box = self.get_region_box_points(region)
 
-            # 현재 드래그 중인 ROI 표시
-            if self.pt1 is not None and self.pt2 is not None:
-                x1, y1 = self.pt1
-                x2, y2 = self.pt2
-                cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        return {
+            "name": analysis["name"],
+            "roi": [int(v) for v in analysis["roi"]],
+            "region_type": region["type"],
+            "region_box_uv": region_box.astype(float).tolist(),
+            "sample_points": sample_points,
+            "centroid": centroid,
+            "normal": [
+                float(analysis["plane_normal"][0]),
+                float(analysis["plane_normal"][1]),
+                float(analysis["plane_normal"][2]),
+            ],
+            "center_point": center_point,
+            "patch_vertices": patch_vertices,
+            "patch_indices": patch_indices,
+            "rmse_mm": float(analysis["rmse"]),
+            "res_mean_mm": float(analysis["res_mean"]),
+            "res_min_mm": float(analysis["res_min"]),
+            "res_max_mm": float(analysis["res_max"]),
+            "roll_deg": float(analysis["roll_deg"]),
+            "pitch_deg": float(analysis["pitch_deg"]),
+            "yaw_deg": float(analysis["yaw_deg"]),
+            "color": [float(color_rgb[0]), float(color_rgb[1]), float(color_rgb[2])],
+        }
 
-            help1 = "MODE: TILE ONLY | ENTER: add tile ROI | c: complete | r: reset tiles | q: quit"
-            help2 = "Wall ROI is fixed at (248,87)~(597,360)"
-            cv2.putText(vis, help1, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2)
-            cv2.putText(vis, help2, (10, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 2)
+    def publish_web_viz_direct(self, wall_analysis, tile_analyses):
+        payload = {
+            "frame_id": "camera_color_optical_frame",
+            "timestamp_sec": float(time.time()),
+            "wall": self.analysis_to_web_plane(wall_analysis, color_rgb=[1.0, 0.9, 0.1]),
+            "tiles": [self.analysis_to_web_plane(t, color_rgb=[0.1, 1.0, 0.2]) for t in tile_analyses],
+        }
 
-            cv2.imshow(self.window_name, vis)
-            key = cv2.waitKey(10) & 0xFF
+        payload_str = json.dumps(payload)
 
-            if key == ord('q'):
-                return False
-
-            elif key == ord('r'):
-                self.tile_rois = []
-                self.pt1 = None
-                self.pt2 = None
-                self.dragging = False
-                self.get_logger().info("[WallTileInspection3DNode] reset tile ROIs")
-
-            elif key == ord('c'):
-                if self.wall_roi is None:
-                    self.get_logger().warn("[WallTileInspection3DNode] wall ROI not set")
-                elif len(self.tile_rois) == 0:
-                    self.get_logger().warn("[WallTileInspection3DNode] no tile ROI registered")
-                else:
-                    return True
-
-            elif key in [13, 32]:
-                if self.pt1 is None or self.pt2 is None:
-                    continue
-
-                x1, y1 = self.pt1
-                x2, y2 = self.pt2
-                u1, u2 = sorted([x1, x2])
-                v1, v2 = sorted([y1, y2])
-
-                try:
-                    roi = self.clamp_roi(u1, v1, u2, v2)
-                except Exception as e:
-                    self.get_logger().warn(f"[WallTileInspection3DNode] invalid tile ROI: {e}")
-                    continue
-
-                name = input("타일 이름 입력: ").strip()
-                if not name:
-                    name = f"tile_{len(self.tile_rois) + 1}"
-
-                self.tile_rois.append({
-                    "name": name,
-                    "roi": roi,
-                })
-                self.get_logger().info(f"[WallTileInspection3DNode] tile ROI added: {name}, {roi}")
-
-                self.pt1 = None
-                self.pt2 = None
-                self.dragging = False
-
-        return False
+        msg = String()
+        msg.data = payload_str
+        # self.web_viz_pub.publish(msg)
 
     # --------------------------------------------------
     # result canvas
     # --------------------------------------------------
     def set_axes_equal_by_wall(self, ax, wall_analysis, tile_analyses):
-        """
-        wall + tile 전체 점들을 기준으로 동일 스케일 축 설정
-        """
         all_pts = [wall_analysis["sample_points_xyz"]]
         for t in tile_analyses:
             all_pts.append(t["sample_points_xyz"])
@@ -889,6 +990,7 @@ class WallTileInspection3DNode(Node):
         ax.set_ylim(cy - r, cy + r)
         ax.set_zlim(cz - r, cz + r)
         ax.set_box_aspect([1, 1, 1])
+
     def compose_result_canvas(
         self,
         wall_analysis,
@@ -900,19 +1002,12 @@ class WallTileInspection3DNode(Node):
     ):
         full = self.depth_to_colormap(self.localizer.depth_image, min_mm, max_mm)
 
-        wu1, wv1, wu2, wv2 = wall_analysis["roi"]
-        cv2.rectangle(full, (wu1, wv1), (wu2, wv2), (0, 255, 255), 2)
-        cv2.putText(full, "WALL", (wu1, max(20, wv1 - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
+        self.draw_region(full, wall_analysis["region"], (0, 255, 255), thickness=2, label="WALL")
         for (u, v) in wall_analysis["sample_uv"]:
             cv2.circle(full, (u, v), 2, (0, 255, 255), -1)
 
         for t in tile_analyses:
-            u1, v1, u2, v2 = t["roi"]
-            cv2.rectangle(full, (u1, v1), (u2, v2), (0, 255, 0), 2)
-            cv2.putText(full, t["name"], (u1, max(20, v1 - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+            self.draw_region(full, t["region"], (0, 255, 0), thickness=2, label=t["name"])
             for (u, v) in t["sample_uv"]:
                 cv2.circle(full, (u, v), 2, (0, 255, 0), -1)
 
@@ -929,7 +1024,7 @@ class WallTileInspection3DNode(Node):
         panel_w = 400
 
         full_panel = cv2.resize(full, (panel_w, panel_h))
-        cv2.putText(full_panel, "Full Depth + ROIs + Sample Points", (10, 25),
+        cv2.putText(full_panel, "Full Depth + Regions + Sample Points", (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.68, (255, 255, 255), 2)
 
         wall_panel = cv2.resize(wall_resid, (panel_w, panel_h))
@@ -963,102 +1058,6 @@ class WallTileInspection3DNode(Node):
         final = np.vstack([canvas, info_panel])
         return final
 
-    def build_plane_axes_from_normal(self, normal):
-        """
-        plane의 local axis 생성
-        z_axis = normal
-        x_axis = camera x축을 plane에 projection
-        y_axis = z x x
-        """
-        z_axis = np.asarray(normal, dtype=np.float64)
-        z_axis = z_axis / np.linalg.norm(z_axis)
-
-        ref_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        x_axis = ref_x - np.dot(ref_x, z_axis) * z_axis
-
-        if np.linalg.norm(x_axis) < 1e-8:
-            ref_x = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-            x_axis = ref_x - np.dot(ref_x, z_axis) * z_axis
-
-        x_axis = x_axis / np.linalg.norm(x_axis)
-        y_axis = np.cross(z_axis, x_axis)
-        y_axis = y_axis / np.linalg.norm(y_axis)
-
-        # re-orthogonalize
-        x_axis = np.cross(y_axis, z_axis)
-        x_axis = x_axis / np.linalg.norm(x_axis)
-
-        return x_axis, y_axis, z_axis
-
-    def build_roi_plane_patch_from_points(self, points_xyz, centroid, normal, resolution=10, margin_mm=0.0):
-        """
-        ROI의 실제 3D 샘플점 분포를 기준으로 plane patch 생성
-        points_xyz: ROI에서 얻은 3D 점들
-        centroid: plane centroid
-        normal: plane normal
-
-        return:
-            X, Y, Z
-        """
-        pts = np.asarray(points_xyz, dtype=np.float64)
-        centroid = np.asarray(centroid, dtype=np.float64)
-
-        x_axis, y_axis, z_axis = self.build_plane_axes_from_normal(normal)
-
-        # centroid 기준으로 local plane 좌표로 투영
-        rel = pts - centroid[None, :]
-        xs = rel @ x_axis
-        ys = rel @ y_axis
-
-        xmin = float(np.min(xs)) - margin_mm
-        xmax = float(np.max(xs)) + margin_mm
-        ymin = float(np.min(ys)) - margin_mm
-        ymax = float(np.max(ys)) + margin_mm
-
-        uu = np.linspace(xmin, xmax, resolution)
-        vv = np.linspace(ymin, ymax, resolution)
-        U, V = np.meshgrid(uu, vv)
-
-        patch = (
-            centroid[None, None, :]
-            + U[..., None] * x_axis[None, None, :]
-            + V[..., None] * y_axis[None, None, :]
-        )
-
-        X = patch[..., 0]
-        Y = patch[..., 1]
-        Z = patch[..., 2]
-        return X, Y, Z
-    def build_plane_patch(self, centroid, normal, size=80.0, resolution=10):
-        """
-        centroid, normal 기준으로 평면 patch mesh 생성
-        return: X, Y, Z
-        """
-        normal = np.asarray(normal, dtype=np.float64)
-        normal = normal / np.linalg.norm(normal)
-
-        ref = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        if abs(np.dot(ref, normal)) > 0.9:
-            ref = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-
-        axis1 = np.cross(normal, ref)
-        axis1 = axis1 / np.linalg.norm(axis1)
-        axis2 = np.cross(normal, axis1)
-        axis2 = axis2 / np.linalg.norm(axis2)
-
-        s = np.linspace(-size, size, resolution)
-        uu, vv = np.meshgrid(s, s)
-
-        pts = (
-            centroid[None, None, :]
-            + uu[..., None] * axis1[None, None, :]
-            + vv[..., None] * axis2[None, None, :]
-        )
-
-        X = pts[..., 0]
-        Y = pts[..., 1]
-        Z = pts[..., 2]
-        return X, Y, Z
     def plot_roi_planes_3d_matplotlib(self, wall_analysis, tile_analyses):
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
@@ -1066,9 +1065,6 @@ class WallTileInspection3DNode(Node):
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection="3d")
 
-        # -------------------------
-        # wall
-        # -------------------------
         w_pts = wall_analysis["sample_points_xyz"]
         w_c = wall_analysis["plane_centroid"]
         w_n = wall_analysis["plane_normal"]
@@ -1084,16 +1080,9 @@ class WallTileInspection3DNode(Node):
         )
         ax.plot_surface(X, Y, Z, alpha=0.35)
 
-        ax.quiver(
-            w_c[0], w_c[1], w_c[2],
-            w_n[0], w_n[1], w_n[2],
-            length=40.0, normalize=True
-        )
+        ax.quiver(w_c[0], w_c[1], w_c[2], w_n[0], w_n[1], w_n[2], length=40.0, normalize=True)
         ax.text(w_c[0], w_c[1], w_c[2], "WALL")
 
-        # -------------------------
-        # tiles
-        # -------------------------
         for t in tile_analyses:
             pts = t["sample_points_xyz"]
             c = t["plane_centroid"]
@@ -1110,11 +1099,7 @@ class WallTileInspection3DNode(Node):
             )
             ax.plot_surface(X, Y, Z, alpha=0.35)
 
-            ax.quiver(
-                c[0], c[1], c[2],
-                n[0], n[1], n[2],
-                length=25.0, normalize=True
-            )
+            ax.quiver(c[0], c[1], c[2], n[0], n[1], n[2], length=25.0, normalize=True)
             ax.text(c[0], c[1], c[2], t["name"])
 
         self.set_axes_equal_by_wall(ax, wall_analysis, tile_analyses)
@@ -1122,11 +1107,12 @@ class WallTileInspection3DNode(Node):
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
         ax.set_zlabel("Z (mm)")
-        ax.set_title("ROI Plane Visualization (Real ROI Size)")
+        ax.set_title("ROI Plane Visualization (Wall: depth ROI, Tile: rotated RGB->Depth ROI)")
         plt.tight_layout()
         plt.show()
+
     # --------------------------------------------------
-    # main run
+    # main
     # --------------------------------------------------
     def run_test(self):
         wait_timeout_sec = float(self.get_parameter("wait_timeout_sec").value)
@@ -1143,18 +1129,42 @@ class WallTileInspection3DNode(Node):
             self.get_logger().error("[WallTileInspection3DNode] failed: sensor data not ready")
             return
 
-        # wall ROI 고정
-        self.wall_roi = self.clamp_roi(248, 87, 597, 360)
-        self.get_logger().info(f"[WallTileInspection3DNode] fixed wall ROI: {self.wall_roi}")
+        wall_region = self.create_wall_region()
+        self.get_logger().info(f"[WallTileInspection3DNode] wall region ready: {wall_region['roi']}")
 
-        ok = self.select_rois(min_mm=min_mm, max_mm=max_mm)
-        if not ok:
-            self.get_logger().warn("[WallTileInspection3DNode] ROI selection cancelled")
+        if not self.wait_for_tile_array(timeout_sec=5.0):
+            self.get_logger().error("[WallTileInspection3DNode] failed: /yolo/tile_array not ready")
             return
 
-        wall_analysis = self.analyze_roi_3d(
-            name="wall",
-            roi=self.wall_roi,
+        self.tile_regions = self.build_tile_regions_from_yolo(margin_px=self.tile_margin_px_depth)
+        if len(self.tile_regions) == 0:
+            self.get_logger().error("[WallTileInspection3DNode] no tile regions generated from YOLO")
+            return
+
+        self.get_logger().info(
+            f"[WallTileInspection3DNode] auto-generated {len(self.tile_regions)} rotated tile regions"
+        )
+        for item in self.tile_regions:
+            self.get_logger().info(
+                f"[AUTO TILE] {item['name']} "
+                f"rgb_center={item['rgb_center']} rgb_size={item['rgb_size']} "
+                f"depth_center=({item['center_uv'][0]:.2f},{item['center_uv'][1]:.2f}) "
+                f"depth_size=({item['size_uv'][0]:.2f},{item['size_uv'][1]:.2f}) "
+                f"theta={item['theta_deg']:.2f}deg bbox={item['roi']} conf={item['conf_score']:.3f}"
+            )
+
+        ok = self.preview_regions(
+            wall_region=wall_region,
+            tile_regions=self.tile_regions,
+            min_mm=min_mm,
+            max_mm=max_mm,
+        )
+        if not ok:
+            self.get_logger().warn("[WallTileInspection3DNode] preview cancelled")
+            return
+
+        wall_analysis = self.analyze_region_3d(
+            region=wall_region,
             n_points=n_points,
             margin=margin,
             kernel_size=kernel_size,
@@ -1164,14 +1174,13 @@ class WallTileInspection3DNode(Node):
             residual_stride=residual_stride,
         )
         if wall_analysis is None:
-            self.get_logger().error("[WallTileInspection3DNode] failed to analyze wall ROI")
+            self.get_logger().error("[WallTileInspection3DNode] failed to analyze wall region")
             return
 
         tile_analyses = []
-        for item in self.tile_rois:
-            a = self.analyze_roi_3d(
-                name=item["name"],
-                roi=item["roi"],
+        for region in self.tile_regions:
+            a = self.analyze_region_3d(
+                region=region,
                 n_points=n_points,
                 margin=margin,
                 kernel_size=kernel_size,
@@ -1181,7 +1190,7 @@ class WallTileInspection3DNode(Node):
                 residual_stride=residual_stride,
             )
             if a is None:
-                self.get_logger().warn(f"[WallTileInspection3DNode] failed to analyze tile ROI: {item['name']}")
+                self.get_logger().warn(f"[WallTileInspection3DNode] failed to analyze tile region: {region['name']}")
                 continue
             tile_analyses.append(a)
 
@@ -1219,9 +1228,7 @@ class WallTileInspection3DNode(Node):
             if t["center_point"] is not None:
                 center_offset_wall = self.signed_distance_to_plane(t["center_point"], wn, wd)
 
-            sample_offsets_to_wall = []
-            for p in t["sample_points_xyz"]:
-                sample_offsets_to_wall.append(self.signed_distance_to_plane(p, wn, wd))
+            sample_offsets_to_wall = [self.signed_distance_to_plane(p, wn, wd) for p in t["sample_points_xyz"]]
             if len(sample_offsets_to_wall) > 0:
                 mean_offset_wall = float(np.mean(sample_offsets_to_wall))
 
@@ -1252,10 +1259,7 @@ class WallTileInspection3DNode(Node):
                 t1 = tile_analyses[i]
                 t2 = tile_analyses[j]
 
-                tilt_diff = self.angle_between_normals_deg(
-                    t1["plane_normal"],
-                    t2["plane_normal"]
-                )
+                tilt_diff = self.angle_between_normals_deg(t1["plane_normal"], t2["plane_normal"])
 
                 offset1 = float("nan")
                 offset2 = float("nan")
@@ -1298,19 +1302,16 @@ class WallTileInspection3DNode(Node):
         self.publish_web_viz_direct(wall_analysis, tile_analyses)
         self.plot_roi_planes_3d_matplotlib(wall_analysis, tile_analyses)
 
-        result_window = "Wall Tile Inspection 3D Result"
-        cv2.namedWindow(result_window, cv2.WINDOW_NORMAL)
-
+        cv2.namedWindow(self.result_window_name, cv2.WINDOW_NORMAL)
         while rclpy.ok():
-            cv2.imshow(result_window, result)
+            cv2.imshow(self.result_window_name, result)
             key = cv2.waitKey(30) & 0xFF
 
             if key == ord('s'):
                 save_path = "/tmp/wall_tile_inspection_3d_result.png"
                 cv2.imwrite(save_path, result)
                 self.get_logger().info(f"[WallTileInspection3DNode] saved result: {save_path}")
-
-            elif key == ord('q') or key == 27:
+            elif key in [ord('q'), 27]:
                 break
 
         cv2.destroyAllWindows()

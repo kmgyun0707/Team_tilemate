@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>타일 단차 확인기</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121a2f;
+      --panel-2: #18223d;
+      --text: #e9eefc;
+      --muted: #9fb0d1;
+      --line: #2d3b63;
+      --good: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --accent: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Pretendard, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #0b1020 0%, #0d1326 100%);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+    .titlebar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .title h1 {
+      margin: 0 0 6px 0;
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .title p {
+      margin: 0;
+      color: var(--muted);
+    }
+    .panel {
+      background: rgba(18, 26, 47, 0.96);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+    }
+    .controls {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 2.5fr 1.2fr 1.2fr auto auto auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    input, select, button {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 11px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 700;
+      background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+      border: none;
+      box-shadow: 0 8px 18px rgba(29, 78, 216, 0.28);
+    }
+    button.secondary {
+      background: #223050;
+      border: 1px solid var(--line);
+      box-shadow: none;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 16px;
+    }
+    .summary {
+      padding: 14px;
+      margin-bottom: 16px;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 12px;
+    }
+    .metric {
+      background: #0f1730;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+    }
+    .metric .k {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .metric .v {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .left, .right { display: flex; flex-direction: column; gap: 16px; }
+    .section { padding: 14px; }
+    .section h2 {
+      margin: 0 0 12px 0;
+      font-size: 18px;
+    }
+    .canvasWrap {
+      position: relative;
+      min-height: 460px;
+    }
+    canvas {
+      width: 100%;
+      height: 460px;
+      background: radial-gradient(circle at 50% 50%, #14203d 0%, #0d1428 100%);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      display: block;
+    }
+    .legend {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #0f1730;
+      border: 1px solid var(--line);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .tableWrap { overflow: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #121a2f;
+      z-index: 1;
+      color: var(--muted);
+      text-align: left;
+      font-weight: 700;
+      border-bottom: 1px solid var(--line);
+      padding: 11px 10px;
+    }
+    tbody td {
+      padding: 11px 10px;
+      border-bottom: 1px solid rgba(45,59,99,0.55);
+      vertical-align: middle;
+    }
+    tbody tr:hover { background: rgba(96,165,250,0.06); }
+    .badge {
+      display: inline-block;
+      padding: 5px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+    }
+    .good { color: #bbf7d0; background: rgba(34,197,94,0.16); border: 1px solid rgba(34,197,94,0.36); }
+    .warn { color: #fde68a; background: rgba(245,158,11,0.16); border: 1px solid rgba(245,158,11,0.36); }
+    .bad  { color: #fecaca; background: rgba(239,68,68,0.16); border: 1px solid rgba(239,68,68,0.36); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .muted { color: var(--muted); }
+    .footer {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+    @media (max-width: 1120px) {
+      .grid { grid-template-columns: 1fr; }
+      .summary { grid-template-columns: repeat(3, 1fr); }
+      .controls { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 720px) {
+      .summary { grid-template-columns: repeat(2, 1fr); }
+      .controls { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="titlebar">
+      <div class="title">
+        <h1>타일 단차 확인기</h1>
+        <p>inspection payload에서 <span class="mono">plane_centroid_mm</span>와 <span class="mono">rpy_deg</span>만으로 단차와 기울어짐을 확인합니다.</p>
+      </div>
+    </div>
+
+    <div class="panel controls">
+      <input id="urlInput" type="text" value="http://localhost:8000/api/inspect/latest" />
+      <select id="baselineMode">
+        <option value="mean">기준면: 평균 Z</option>
+        <option value="median">기준면: 중앙값 Z</option>
+        <option value="min">기준면: 최소 Z</option>
+        <option value="max">기준면: 최대 Z</option>
+        <option value="tile">기준면: 선택 타일 Z</option>
+      </select>
+      <select id="baselineTile"></select>
+      <input id="warnMm" type="number" step="0.1" value="3.0" title="주의 기준 mm" />
+      <input id="badMm" type="number" step="0.1" value="6.0" title="불량 기준 mm" />
+      <button id="fetchBtn">새로고침</button>
+    </div>
+
+    <div class="panel summary" id="summaryRow">
+      <div class="metric"><div class="k">타일 수</div><div class="v" id="mTiles">-</div></div>
+      <div class="metric"><div class="k">기준 Z (mm)</div><div class="v" id="mBase">-</div></div>
+      <div class="metric"><div class="k">최대 단차 |ΔZ| (mm)</div><div class="v" id="mMaxDz">-</div></div>
+      <div class="metric"><div class="k">평균 기울기 (°)</div><div class="v" id="mAvgTilt">-</div></div>
+      <div class="metric"><div class="k">불량 개수</div><div class="v" id="mBad">-</div></div>
+      <div class="metric"><div class="k">갱신 시각</div><div class="v" id="mTime" style="font-size:16px;">-</div></div>
+    </div>
+
+    <div class="grid">
+      <div class="left">
+        <div class="panel section">
+          <h2>배치도 + 단차 색상</h2>
+          <div class="canvasWrap">
+            <canvas id="mapCanvas" width="900" height="460"></canvas>
+          </div>
+          <div class="legend">
+            <span class="chip"><span class="dot" style="background:#22c55e"></span> 정상</span>
+            <span class="chip"><span class="dot" style="background:#f59e0b"></span> 주의</span>
+            <span class="chip"><span class="dot" style="background:#ef4444"></span> 불량</span>
+            <span class="chip">원 크기 = |ΔZ|</span>
+            <span class="chip">텍스트 = tile name / ΔZ / Tilt</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="right">
+        <div class="panel section tableWrap">
+          <h2>타일별 단차 표</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Tile</th>
+                <th>Conf</th>
+                <th>Center UV</th>
+                <th>Z (mm)</th>
+                <th>ΔZ (mm)</th>
+                <th>Tilt (°)</th>
+                <th>RPY (°)</th>
+                <th>상태</th>
+              </tr>
+            </thead>
+            <tbody id="tileTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">단일 HTML 파일 · payload format: name / conf_score / center_uv / size_uv / rpy_deg / plane_normal / plane_d / plane_centroid_mm</div>
+  </div>
+
+  <script>
+    const es = new EventSource("/api/inspect/events");
+    es.addEventListener("inspect_updated", async () => {
+    await loadLatest();
+    });
+    
+    const el = (id) => document.getElementById(id);
+
+    const state = {
+      data: null,
+      timer: null,
+      lastSig: '',
+    };
+
+    function fmt(v, d = 2) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(d) : '-';
+    }
+
+    function tiltDeg(rpy) {
+      const r = Number(rpy?.[0] ?? 0);
+      const p = Number(rpy?.[1] ?? 0);
+      return Math.sqrt(r * r + p * p);
+    }
+
+    function median(values) {
+      if (!values.length) return NaN;
+      const arr = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(arr.length / 2);
+      return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+    }
+
+    function computeBaseline(tiles) {
+      const zs = tiles.map(t => Number(t.plane_centroid_mm?.[2])).filter(Number.isFinite);
+      if (!zs.length) return NaN;
+
+      const mode = el('baselineMode').value;
+      if (mode === 'mean') return zs.reduce((a, b) => a + b, 0) / zs.length;
+      if (mode === 'median') return median(zs);
+      if (mode === 'min') return Math.min(...zs);
+      if (mode === 'max') return Math.max(...zs);
+      if (mode === 'tile') {
+        const name = el('baselineTile').value;
+        const t = tiles.find(x => x.name === name);
+        return Number(t?.plane_centroid_mm?.[2]);
+      }
+      return zs.reduce((a, b) => a + b, 0) / zs.length;
+    }
+
+    function classify(dzAbs) {
+      const warn = Number(el('warnMm').value || 3);
+      const bad = Number(el('badMm').value || 6);
+      if (dzAbs >= bad) return { cls: 'bad', text: '불량', color: '#ef4444' };
+      if (dzAbs >= warn) return { cls: 'warn', text: '주의', color: '#f59e0b' };
+      return { cls: 'good', text: '정상', color: '#22c55e' };
+    }
+
+    function signature(data) {
+      const t0 = data?.tiles?.[0] ?? {};
+      return [data?.timestamp_sec, t0.name, ...(t0.plane_centroid_mm ?? []), ...(t0.rpy_deg ?? [])].join('_');
+    }
+
+    function syncBaselineTileOptions(tiles) {
+      const sel = el('baselineTile');
+      const prev = sel.value;
+      sel.innerHTML = '';
+      for (const tile of tiles) {
+        const opt = document.createElement('option');
+        opt.value = tile.name;
+        opt.textContent = tile.name;
+        sel.appendChild(opt);
+      }
+      if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+    }
+
+    function normalizeTiles(data) {
+      const tiles = Array.isArray(data?.tiles) ? data.tiles : [];
+      const baseZ = computeBaseline(tiles);
+      return tiles.map(tile => {
+        const z = Number(tile.plane_centroid_mm?.[2]);
+        const dz = z - baseZ;
+        const tilt = tiltDeg(tile.rpy_deg);
+        return {
+          ...tile,
+          z,
+          dz,
+          dzAbs: Math.abs(dz),
+          tilt,
+          judge: classify(Math.abs(dz)),
+        };
+      }).sort((a, b) => b.dzAbs - a.dzAbs);
+    }
+
+    function updateSummary(tiles, baseZ, data) {
+      el('mTiles').textContent = String(tiles.length);
+      el('mBase').textContent = fmt(baseZ, 2);
+      el('mMaxDz').textContent = tiles.length ? fmt(Math.max(...tiles.map(t => t.dzAbs)), 2) : '-';
+      el('mAvgTilt').textContent = tiles.length ? fmt(tiles.reduce((s, t) => s + t.tilt, 0) / tiles.length, 2) : '-';
+      el('mBad').textContent = String(tiles.filter(t => t.judge.cls === 'bad').length);
+      el('mTime').textContent = data?.timestamp_sec ? new Date(data.timestamp_sec * 1000).toLocaleTimeString() : '-';
+    }
+
+    function renderTable(tiles) {
+      const tbody = el('tileTableBody');
+      tbody.innerHTML = '';
+
+      for (const t of tiles) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${t.name}</strong></td>
+          <td>${fmt(t.conf_score, 4)}</td>
+          <td class="mono">(${fmt(t.center_uv?.[0], 1)}, ${fmt(t.center_uv?.[1], 1)})</td>
+          <td class="mono">${fmt(t.z, 2)}</td>
+          <td class="mono" style="font-weight:800;color:${t.judge.color};">${t.dz >= 0 ? '+' : ''}${fmt(t.dz, 2)}</td>
+          <td class="mono">${fmt(t.tilt, 2)}</td>
+          <td class="mono">[${fmt(t.rpy_deg?.[0], 2)}, ${fmt(t.rpy_deg?.[1], 2)}, ${fmt(t.rpy_deg?.[2], 2)}]</td>
+          <td><span class="badge ${t.judge.cls}">${t.judge.text}</span></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function drawMap(tiles) {
+      const canvas = el('mapCanvas');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.fillStyle = '#0e152a';
+      ctx.fillRect(0, 0, w, h);
+
+      // grid
+      ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+      ctx.lineWidth = 1;
+      for (let x = 40; x < w; x += 60) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      }
+      for (let y = 40; y < h; y += 60) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      }
+
+      if (!tiles.length) return;
+
+      const us = tiles.map(t => Number(t.center_uv?.[0])).filter(Number.isFinite);
+      const vs = tiles.map(t => Number(t.center_uv?.[1])).filter(Number.isFinite);
+      const minU = Math.min(...us), maxU = Math.max(...us);
+      const minV = Math.min(...vs), maxV = Math.max(...vs);
+      const pad = 70;
+      const sx = (u) => pad + ((u - minU) / Math.max(1, maxU - minU)) * (w - 2 * pad);
+      const sy = (v) => pad + ((v - minV) / Math.max(1, maxV - minV)) * (h - 2 * pad);
+
+      // guide line
+      ctx.strokeStyle = 'rgba(96,165,250,0.25)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      tiles.forEach((t, i) => {
+        const x = sx(Number(t.center_uv[0]));
+        const y = sy(Number(t.center_uv[1]));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      for (const t of tiles) {
+        const x = sx(Number(t.center_uv[0]));
+        const y = sy(Number(t.center_uv[1]));
+        const radius = 14 + Math.min(34, t.dzAbs * 2.8);
+
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = t.judge.color + '33';
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = t.judge.color;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#f8fafc';
+        ctx.fill();
+
+        ctx.fillStyle = '#e5e7eb';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText(t.name, x + radius + 8, y - 10);
+        ctx.font = '13px sans-serif';
+        ctx.fillText(`ΔZ ${t.dz >= 0 ? '+' : ''}${fmt(t.dz, 2)} mm`, x + radius + 8, y + 8);
+        ctx.fillText(`Tilt ${fmt(t.tilt, 2)}°`, x + radius + 8, y + 24);
+      }
+    }
+
+    function render(data) {
+      state.data = data;
+      const tilesRaw = Array.isArray(data?.tiles) ? data.tiles : [];
+      syncBaselineTileOptions(tilesRaw);
+      const tiles = normalizeTiles(data);
+      const baseZ = computeBaseline(tilesRaw);
+      updateSummary(tiles, baseZ, data);
+      renderTable(tiles);
+      drawMap(tiles);
+    }
+
+    async function fetchData(force = false) {
+      const url = el('urlInput').value.trim();
+      if (!url) return;
+
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!Array.isArray(data?.tiles) || data.tiles.length === 0) throw new Error('tiles 없음');
+
+        const sig = signature(data);
+        if (!force && sig === state.lastSig) return;
+        state.lastSig = sig;
+        render(data);
+      } catch (err) {
+        console.error(err);
+        // alert(`데이터 로드 실패: ${err.message}`);
+      }
+    }
+
+
+    el('fetchBtn').addEventListener('click', () => fetchData(true));
+    el('baselineMode').addEventListener('change', () => state.data && render(state.data));
+    el('baselineTile').addEventListener('change', () => state.data && render(state.data));
+    el('warnMm').addEventListener('change', () => state.data && render(state.data));
+    el('badMm').addEventListener('change', () => state.data && render(state.data));
+    window.addEventListener('resize', () => state.data && drawMap(normalizeTiles(state.data)));
+
+    fetchData(true);
+  </script>
+</body>
+</html>

@@ -5,8 +5,10 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import os
+import math # 🌟 타일 위치(거리) 계산을 위해 추가
+from ament_index_python.packages import get_package_share_directory 
 
-# 🌟 커스텀 메시지 배열 임포트
+# 커스텀 메시지 배열 임포트
 from custom_tile_msgs.msg import TileArray, InspectionResult, InspectionResultArray
 
 class RuleBasedAnomalyNode(Node):
@@ -16,21 +18,20 @@ class RuleBasedAnomalyNode(Node):
 
         # ==========================================
         # 💡 1. 세팅 및 9개 패턴별 안전지대 생성
-        # ==========================================
-        
-        # 🔥 본인의 YOLO CLS 모델이 뱉는 '패턴 이름'과 '기준 이미지 경로'를 매칭해주세요!
-        self.ref_image_paths = {
-            "pattern_1": "/home/rokey/kmg/rule_based_img/ref_pattern_1.jpg",
-            "pattern_2": "/home/rokey/kmg/rule_based_img/ref_pattern_2.jpg",
-            "pattern_3": "/home/rokey/kmg/rule_based_img/ref_pattern_3.jpg",
-            "pattern_4": "/home/rokey/kmg/rule_based_img/ref_pattern_4.jpg",
-            "pattern_5": "/home/rokey/kmg/rule_based_img/ref_pattern_5.jpg",
-            "pattern_6": "/home/rokey/kmg/rule_based_img/ref_pattern_6.jpg",
-            "pattern_7": "/home/rokey/kmg/rule_based_img/ref_pattern_7.jpg",
-            "pattern_8": "/home/rokey/kmg/rule_based_img/ref_pattern_8.jpg",
-            "pattern_9": "/home/rokey/kmg/rule_based_img/ref_pattern_9.jpg",
-        }
+        # ==========================================  
 
+        # 동적 홈 디렉토리 경로 가져오기 
+        package_name = 'tilemate_main' 
+        
+        # 패키지의 share 디렉토리 경로를 동적으로 가져옴
+        pkg_share_dir = get_package_share_directory(package_name)
+        img_base_dir = os.path.join(pkg_share_dir, 'rule_based_img')
+
+        self.ref_image_paths = {
+            f"pattern_{i}": os.path.join(img_base_dir, f"ref_pattern_{i}.jpg") 
+            for i in range(1, 10)
+        }
+    
         # 생성된 안전지대를 저장할 딕셔너리
         self.safe_zones = {}
         kernel = np.ones((11,11), np.uint8) 
@@ -48,7 +49,15 @@ class RuleBasedAnomalyNode(Node):
 
         self.get_logger().info(f"✅ {len(self.safe_zones)}개 패턴의 안전지대 로드 완료! (허용 기준: {self.pixel_threshold}픽셀)")
 
-        # 2. 통신망 세팅
+        # ==========================================
+        # 🔥 2. 프레임 누적(버퍼) 트래킹 변수 세팅
+        # ==========================================
+        self.TARGET_FRAMES = 60          # 누적 검사할 프레임 수
+        self.current_frame_count = 0     # 현재 누적된 프레임
+        self.tracked_tiles = []          # 타일별 이력(History)을 저장할 버퍼
+        self.MATCH_DIST_THRESHOLD = 50.0 # 이전 프레임 타일과 동일 타일로 간주할 픽셀 거리 오차
+
+        # 3. 통신망 세팅
         self.tile_sub = self.create_subscription(TileArray, '/yolo/tile_array', self.inference_callback, 10)
         self.web_pub = self.create_publisher(InspectionResultArray, '/web/inspection_results', 10)
         self.debug_pub = self.create_publisher(Image, '/anomaly/debug_rule_based', 10)
@@ -67,72 +76,124 @@ class RuleBasedAnomalyNode(Node):
 
     def inference_callback(self, msg):
         try:
-            result_array_msg = InspectionResultArray()
-            result_array_msg.header = msg.header
-            result_array_msg.total_tiles = len(msg.tiles)
+            # 🌟 이미 목표 프레임을 다 채웠다면, 다음 촬영 명령(버퍼 초기화)이 올 때까지 대기
+            if self.current_frame_count >= self.TARGET_FRAMES:
+                return
 
-            for idx, tile in enumerate(msg.tiles):
-                
-                # 🌟 타일의 패턴 이름 가져오기
+            for tile in msg.tiles:
                 current_pattern = tile.pattern_name
                 
-                # 웹으로 보낼 기본 결과 폼
-                res_msg = InspectionResult()
-                res_msg.tile_id = idx + 1
-                res_msg.pattern_name = current_pattern
-                res_msg.pose = tile.pose      
-                res_msg.width = tile.width    
-                res_msg.height = tile.height  
-
-                # 🌟 패턴에 맞는 안전지대가 있는지 확인
                 if current_pattern not in self.safe_zones:
                     self.get_logger().warn(f"⚠️ 등록되지 않은 패턴({current_pattern}) 감지! 검사 생략.")
-                    res_msg.is_defective = False
-                    res_msg.defect_type = "Unknown Pattern"
-                    result_array_msg.results.append(res_msg)
                     continue
 
-                # 🌟 해당 패턴 전용 안전지대(Safe Zone) 꺼내오기!
                 target_safe_zone = self.safe_zones[current_pattern]
 
-                # 1. 이미지 변환
+                # 1. 이미지 변환 및 리사이즈
                 curr_img = self.bridge.imgmsg_to_cv2(tile.cropped_image, desired_encoding='bgr8')
-                
-                # 🌟 강제 리사이즈 기준을 target_safe_zone의 모양으로 설정
                 curr_img = cv2.resize(curr_img, (target_safe_zone.shape[1], target_safe_zone.shape[0]))
 
-                # 2. 엣지 추출
+                # 2. 엣지 추출 및 빼기 연산
                 curr_edges = self.get_canny_edges(curr_img)
-
-                # 3. 🌟 빼기 연산 (현재 엣지 - 타겟 패턴의 안전지대 마스크)
                 defect_edges = cv2.subtract(curr_edges, target_safe_zone)
 
-                # 4. 불량 판정
-                defect_pixel_count = np.sum(defect_edges > 0)
+                # 3. 단일 프레임 불량 판정
+                defect_pixel_count = int(np.sum(defect_edges > 0))
                 is_defect = bool(defect_pixel_count > self.pixel_threshold)
 
-                # 5. 결과 기록
-                res_msg.is_defective = is_defect
-                res_msg.defect_type = "Crack" if is_defect else "None"
-                result_array_msg.results.append(res_msg)
+                # ==========================================
+                # 🔥 4. 위치 기반 트래킹 및 버퍼에 저장
+                # ==========================================
+                matched = False
+                for tt in self.tracked_tiles:
+                    # 현재 타일이 버퍼 안의 타일 중 어느 것과 같은지 '거리(distance)'로 매칭
+                    dist = math.hypot(tt['pose'].x - tile.pose.x, tt['pose'].y - tile.pose.y)
+                    
+                    if dist < self.MATCH_DIST_THRESHOLD: 
+                        tt['crack_history'].append(defect_pixel_count)
+                        tt['vote_history'].append(is_defect)
+                        tt['pose'] = tile.pose # 최신 좌표로 갱신
+                        matched = True
+                        break
 
-                # 6. 시각화 
-                curr_img_debug = curr_img.copy()
-                curr_img_debug[defect_edges > 0] = [0, 0, 255] 
-                
-                debug_msg = self.bridge.cv2_to_imgmsg(curr_img_debug, encoding="bgr8")
-                self.debug_pub.publish(debug_msg)
+                # 처음 보는 위치의 타일이라면 버퍼에 새로 등록
+                if not matched:
+                    self.tracked_tiles.append({
+                        'pose': tile.pose,
+                        'pattern_name': current_pattern,
+                        'width': tile.width,
+                        'height': tile.height,
+                        'crack_history': [defect_pixel_count],
+                        'vote_history': [is_defect]
+                    })
 
-                # 로그 출력
-                status = "🚨 폐기" if is_defect else "✅ 정상"
-                self.get_logger().info(f"[{current_pattern}] 타일 {idx+1}: {status} | 크랙: {defect_pixel_count}")
+                # 시각화 (디버깅용: 10프레임 중 마지막 프레임에만 화면 발행)
+                if self.current_frame_count == self.TARGET_FRAMES - 1:
+                    curr_img_debug = curr_img.copy()
+                    curr_img_debug[defect_edges > 0] = [0, 0, 255] 
+                    debug_msg = self.bridge.cv2_to_imgmsg(curr_img_debug, encoding="bgr8")
+                    self.debug_pub.publish(debug_msg)
 
-            # 7. 웹 전송
-            if len(result_array_msg.results) > 0:
-                self.web_pub.publish(result_array_msg)
+            # 한 프레임 처리가 끝났으므로 카운트 증가
+            self.current_frame_count += 1
+            self.get_logger().info(f"⏳ 데이터 누적 중... ({self.current_frame_count}/{self.TARGET_FRAMES} 프레임)")
+
+            # ==========================================
+            # 🏆 5. 목표 프레임 도달 시: 다수결 판정 후 웹으로 전송
+            # ==========================================
+            if self.current_frame_count >= self.TARGET_FRAMES:
+                self.publish_final_results(msg.header)
+                self.reset_buffer() # 🌟 전송 후 바로 초기화하여 다음 촬영 준비!
 
         except Exception as e:
             self.get_logger().error(f"🚨 룰 베이스 추론 중 에러: {e}")
+
+    def publish_final_results(self, header):
+        result_array_msg = InspectionResultArray()
+        result_array_msg.header = header
+        
+        self.get_logger().info("=========================================")
+        self.get_logger().info(f"🎯 {self.TARGET_FRAMES}프레임 다수결 검사 완료! (결과 웹 전송)")
+
+        for idx, tt in enumerate(self.tracked_tiles):
+            # 노이즈로 잠깐 나타났다 사라진 유령 타일 무시 (예: 10프레임 중 5프레임 미만으로 보인 경우)
+            if len(tt['vote_history']) < (self.TARGET_FRAMES / 2):
+                continue
+
+            # 🔥 다수결 로직 적용
+            total_votes = len(tt['vote_history'])
+            defect_votes = sum(tt['vote_history'])
+            avg_cracks = sum(tt['crack_history']) / total_votes 
+
+            # 불량 판정이 절반 이상이면 최종 불량 확정
+            final_is_defect = bool(defect_votes >= (total_votes / 2.0))
+
+            # 웹으로 보낼 최종 메시지 폼 작성
+            res_msg = InspectionResult()
+            res_msg.tile_id = idx + 1
+            res_msg.pattern_name = tt['pattern_name']
+            res_msg.pose = tt['pose']      
+            res_msg.width = tt['width']    
+            res_msg.height = tt['height']  
+            res_msg.is_defective = final_is_defect
+            res_msg.defect_type = "Crack" if final_is_defect else "None"
+
+            result_array_msg.results.append(res_msg)
+
+            status = "🚨 최종 폐기" if final_is_defect else "✅ 최종 정상"
+            self.get_logger().info(f"[{tt['pattern_name']}] 타일 {idx+1}: {status} | 불량 판정: {defect_votes}/{total_votes}회 (평균 크랙: {avg_cracks:.1f}px)")
+        
+        self.get_logger().info("=========================================")
+
+        # 검사된 타일 총 개수 입력 후 발행
+        result_array_msg.total_tiles = len(result_array_msg.results)
+        if result_array_msg.total_tiles > 0:
+            self.web_pub.publish(result_array_msg)
+
+    def reset_buffer(self):
+        # 검사가 끝났으므로 변수 초기화. 이제 다음 타일 무더기가 화면에 잡히면 다시 0부터 10까지 센다.
+        self.current_frame_count = 0
+        self.tracked_tiles = []
 
 def main(args=None):
     rclpy.init(args=args)

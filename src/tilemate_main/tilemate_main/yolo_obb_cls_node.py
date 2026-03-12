@@ -8,6 +8,9 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 from rclpy.qos import qos_profile_sensor_data, ReliabilityPolicy, DurabilityPolicy, QoSProfile
+from ament_index_python.packages import get_package_share_directory # 추가
+import os
+
 
 # 🌟 방금 만든 커스텀 메시지 임포트!
 from custom_tile_msgs.msg import Tile, TileArray
@@ -27,13 +30,19 @@ class YoloTwoStageNode(Node):
     def __init__(self):
         super().__init__('yolo_two_stage_node')
         self.bridge = CvBridge()
+
+        # 동적 홈 디렉토리 경로 가져오기 
+        package_name = 'tilemate_main' 
+        
+        # 패키지의 share 디렉토리 경로를 동적으로 가져옴
+        pkg_share_dir = get_package_share_directory(package_name)
         
         # ==========================================
         # 🧠 1. 두 개의 모델 로드
         # ==========================================
-        obb_model_path = '/home/rokey/kmg/yolo26s-obb_v5.pt'
-        cls_model_path = '/home/rokey/kmg/yolov8n-cls_v1.pt' 
-        
+        obb_model_path = os.path.join(pkg_share_dir, 'yolo26s-obb_v5.pt')
+        cls_model_path = os.path.join(pkg_share_dir, 'yolov8n-cls_v1.pt')
+  
         try:
             self.obb_model = YOLO(obb_model_path)
             self.cls_model = YOLO(cls_model_path)

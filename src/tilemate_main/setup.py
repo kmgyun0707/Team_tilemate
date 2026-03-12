@@ -36,6 +36,8 @@ setup(
             'depthtest = tilemate_main.depthtest:main',
             'test_wall_plane_visualizer = tilemate_main.test_wall_plane_visualizer:main',
             'test_wall_tile_inspection_3d = tilemate_main.test_wall_tile_inspection_3d:main',
+            'yolo_obb_cls_node = tilemate_main.yolo_obb_cls_node:main',
+            'rule_base_node = tilemate_main.rule_base_node:main',
         ],
     },
 )

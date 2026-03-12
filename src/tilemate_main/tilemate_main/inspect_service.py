@@ -13,7 +13,7 @@ from tilemate_main.robot_config import RobotConfig, GripperConfig
 
 class InspectService(Node):
 
-    def __init__(self, boot_node: Node):
+    def __init__(self, robot_cfg: RobotConfig, gripper_cfg: GripperConfig, boot_node: Node):
 
         super().__init__("inspect_service", namespace=RobotConfig.robot_id)
 
@@ -21,6 +21,12 @@ class InspectService(Node):
         self.robot_cfg = RobotConfig
         self.gripper_cfg = GripperConfig
 
+        from tilemate_main.onrobot import RG
+        self.gripper = RG(
+            gripper_cfg.GRIPPER_NAME,
+            gripper_cfg.TOOLCHARGER_IP,
+            gripper_cfg.TOOLCHARGER_PORT,
+        )
         self.cb_group = ReentrantCallbackGroup()
 
         self.srv = self.create_service(
@@ -93,6 +99,7 @@ class InspectService(Node):
         try:
 
             self.get_logger().info("[INSPECT] start inspection")
+            self.gripper.open_gripper()
 
             candidates = [
                 posx([380.6733093261719, 177.2272491455078, 179.8480987548828, 89.89385223388672, 91.91939544677734, 92.74739837646484]),
@@ -129,6 +136,8 @@ class InspectService(Node):
 def main(args=None):
 
     rclpy.init(args=args)
+    robot_cfg = RobotConfig()
+    gripper_cfg = GripperConfig()
 
     boot = rclpy.create_node("dsr_boot_inspect", namespace=RobotConfig.robot_id)
 
@@ -138,7 +147,7 @@ def main(args=None):
 
     import DSR_ROBOT2  # noqa
 
-    node = InspectService(boot)
+    node = InspectService(robot_cfg, gripper_cfg, boot)
 
     ex = MultiThreadedExecutor()
     ex.add_node(node)

@@ -24,6 +24,7 @@ set(action_files
   "action/Cowork.action"
   "action/Inspect.action"
   "action/Press.action"
+  "action/PatternInspect.action"
 )
 
 

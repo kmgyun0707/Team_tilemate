@@ -11,37 +11,40 @@ def generate_launch_description():
         "resource",
         "T_gripper2camera.npy"
     )
+    rule_based_img_path = os.path.join(
+        pkg_share,
+        "resource",
+        "rule_based_img"
+    )
 
     return LaunchDescription([
         # 노드의 로봇 ns는 내부에서 namespace=dsr01로 생성됨
-        # 타일 피킹 노드
+        # 타일 단차 검사 노드
         Node(
             package="tilemate_main",
-            executable="pick_tile_action_server",
+            executable="inspect_action_server",
             output="screen",
+            parameters=[
+                {
+                    "gripper2cam_path": npy_path
+                }
+            ],
         ),
-        #협업 노드
+        # 타일 패턴 검사 노드
         Node(
             package="tilemate_main",
-            executable="cowork_action_server",
+            executable="pattern_inspect_action_server",
             output="screen",
+            # parameters=[
+            #     {
+            #         "rule_based_img_path": rule_based_img_path
+            #     }
+            # ],
         ),
-        # 타일 배치 노드
+        # Yolo모델 로드
         Node(
             package="tilemate_main",
-            executable="place_tile_action_server",
-            output="screen",
-        ),
-        # 타일 압착 노드
-        Node(
-            package="tilemate_main",
-            executable="press_action_server",
-            output="screen",
-        ),
-        # 상태 관리 노드
-        Node(
-            package="tilemate_main",
-            executable="task_manager",
+            executable="yolo_obb_cls_node",
             output="screen",
         ),
     ])

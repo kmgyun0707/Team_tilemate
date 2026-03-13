@@ -1,0 +1,16 @@
+#goal
+int32 target_frames
+int32 pixel_threshold
+float32 match_dist_threshold
+---
+#result
+bool success
+string message
+int32 total_tiles
+int32 defective_tiles
+---
+#feedback
+int32 step
+int32 current_frame
+float32 progress
+string state

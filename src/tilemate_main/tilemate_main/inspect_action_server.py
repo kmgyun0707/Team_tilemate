@@ -58,7 +58,7 @@ class InspectActionServer(Node):
         self.inspection_engine = WallTileInspectionEngine(self)
 
         self.initialize_robot()
-        self.get_logger().info("\033[94m [5/5] [INSPECT] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [5/6] [INSPECT] initialize Done!\033[0m")
 
     def initialize_robot(self):
         from DSR_ROBOT2 import (
@@ -75,7 +75,6 @@ class InspectActionServer(Node):
         set_tcp(self.robot_cfg.tcp)
         set_robot_mode(ROBOT_MODE_AUTONOMOUS)
 
-        time.sleep(1.0)
         wait(1.0)
 
     def move_to_inspect_pose(self):

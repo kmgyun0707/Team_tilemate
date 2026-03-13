@@ -68,7 +68,7 @@ class CoworkActionServer(Node):
         )
 
         self.initialize_robot()
-        self.get_logger().info("\033[94m [3/5] [COWORK_TILE] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [3/6] [COWORK_TILE] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # event callbacks
@@ -271,7 +271,6 @@ class CoworkActionServer(Node):
         # 기존 단독 스크립트 값 이식
         tool_pre_grip = [238.763, -373.264, 201.064]
         tool_grip = [235.122, -362.591, 123.0]
-        retreat_x = [235.122, -232.591, 123.0]
 
         # step start_step: 툴 상단 이동
         if self.check_cancel(goal_handle, start_step):

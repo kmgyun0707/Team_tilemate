@@ -14,7 +14,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from action_msgs.msg import GoalStatus
 
-from tilemate_msgs.action import ExecuteJob, PickTile, PlaceTile, Cowork, Inspect, Press
+from tilemate_msgs.action import ExecuteJob, PickTile, PlaceTile, Cowork, Inspect, Press, PatternInspect
 from tilemate_main.robot_config import RobotConfig
 
 
@@ -91,7 +91,9 @@ class TaskManagerNode(Node):
         self.press_client = ActionClient(
             self, Press, f"{robot_ns}/tile/press", callback_group=self.cb_group
         )
-
+        self.pattern_inspect_client = ActionClient(
+            self, PatternInspect, f"{robot_ns}/tile/pattern_inspect", callback_group=self.cb_group
+        )
         self._current_total_tiles = 0
         self.current_tile_index = -1
         self.current_tile_type = -1
@@ -106,8 +108,10 @@ class TaskManagerNode(Node):
             TileStepDef(self.TILE_STEP_INSPECT, "inspect", self._step_inspect),
             TileStepDef(self.TILE_STEP_COMPACT, "compact", self._step_compact),
         ]
-
-        self.get_logger().info("\033[94m [1/5] [TASK_MANAGER] initialize Done!\033[0m")
+        self.get_logger().info(
+            f"name={self.get_name()}, ns={self.get_namespace()}, fq={self.get_fully_qualified_name()}"
+        )
+        self.get_logger().info("\033[94m [1/6] [TASK_MANAGER] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # common state / feedback
@@ -352,7 +356,22 @@ class TaskManagerNode(Node):
                 state=f"compact:{step}:{state}",
             )
         return _cb
+    def _make_pattern_inspect_feedback_cb(self, goal_handle, tile_index: int, tile_type: int):
+        def _cb(feedback_msg):
+            fb = feedback_msg.feedback
+            current_frame = int(getattr(fb, "current_frame", 0))
+            progress = float(getattr(fb, "progress", 0.0))
+            state = str(getattr(fb, "state", "pattern_inspect"))
 
+            self._update_and_publish_feedback(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                detail_step=self.TILE_STEP_INSPECT,
+                detail_progress=progress,
+                state=f"inspect:pattern:{current_frame}:{state}",
+            )
+        return _cb
     # --------------------------------------------------
     # generic action runner
     # --------------------------------------------------
@@ -435,12 +454,25 @@ class TaskManagerNode(Node):
         )
 
     async def _step_inspect(self, ctx: TileRunContext):
-        return await self.call_inspect(
+        # 단차검사
+        ok, msg = await self.call_inspect(
             goal_handle=ctx.goal_handle,
             tile_index=ctx.tile_index,
             tile_type=ctx.tile_type,
             total_tiles=ctx.total_tiles,
         )
+        if not ok:
+            return False, f"depth_inspect_failed:{msg}"
+        # 패턴검사
+        ok, msg = await self.call_pattern_inspect(
+            goal_handle=ctx.goal_handle,
+            tile_index=ctx.tile_index,
+            tile_type=ctx.tile_type,
+        )
+        if not ok:
+            return False, f"pattern_inspect_failed:{msg}"
+
+        return True, "inspect_all_ok"
 
     async def _step_compact(self, ctx: TileRunContext):
         return await self.call_press(
@@ -515,7 +547,20 @@ class TaskManagerNode(Node):
             goal_handle=goal_handle,
             phase_name="inspect",
         )
+    async def call_pattern_inspect(self, goal_handle, tile_index, tile_type):
+        goal = PatternInspect.Goal()
+        goal.target_frames = 60
+        goal.pixel_threshold = 60
+        goal.match_dist_threshold = 50.0
 
+        return await self._run_action_subtask(
+            client=self.pattern_inspect_client,
+            client_name="pattern_inspect_action",
+            goal_msg=goal,
+            feedback_callback=self._make_pattern_inspect_feedback_cb(goal_handle, tile_index, tile_type),
+            goal_handle=goal_handle,
+            phase_name="pattern_inspect",
+        )
     async def call_press(self, goal_handle, tile_index, tile_type):
         goal = Press.Goal()
         goal.result_json_path = ""

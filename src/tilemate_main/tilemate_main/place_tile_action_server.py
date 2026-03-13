@@ -252,10 +252,10 @@ class PlaceTileActionServer(Node):
 
         req = goal_handle.request
 
-        STX_Y = 20
-        STX_ROL = 10
-        STX_PIT = 10
-        STX_YAW = 10
+        STX_Y = 50
+        STX_ROL = 50
+        STX_PIT = 50
+        STX_YAW = 50
 
         Force = float(req.max_press_force)
 
@@ -384,22 +384,6 @@ class PlaceTileActionServer(Node):
             movel(posx(target), ref=DR_BASE, vel=30, acc=30)
             mwait()
 
-        def move_absoulte(x: float, y: float, z: float, w: float = 0.0, p: float = 0.0, r: float = 0.0):
-            from DSR_ROBOT2 import posx, movel, mwait, DR_BASE, get_current_posx
-
-            cur, _ = get_current_posx(DR_BASE)
-            target = [
-                x,
-                y,
-                z,
-                cur[3] + w,
-                cur[4] + p,
-                cur[5] + r,
-            ]
-            movel(posx(target), ref=DR_BASE, vel=30, acc=30)
-            mwait()
-            print(get_current_posx(DR_BASE))
-
         def move_to_tile_place_position(placement_index: int):
             from DSR_ROBOT2 import posx, movel, mwait, DR_BASE
 
@@ -435,7 +419,7 @@ class PlaceTileActionServer(Node):
             mwait()
             return dx, dz
 
-        j_ready = posj([0, 0, 90, 0, 90, 0])
+        j_ready = posj([0, 0, 90, 0, 90, 180])
 
 
         # 1) Home

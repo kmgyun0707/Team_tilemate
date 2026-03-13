@@ -275,57 +275,69 @@ def select_design() -> int:
     except Exception:
         return 1
 
-def run_full_scenario(design: int = 1, tile_count: int = 3):
+def run_full_scenario(design: int = 1, tile_count: int = 9):
     """
-    PICK → COWORK → PLACE → INSPECT → COMPACT 자동 시나리오.
-    각 단계에서 Firebase 업데이트 → index.html 2D 그리드 / 공정 단계 반영.
+    실제 시나리오: PICK → COWORK → PLACE x tile_count 반복 후
+    한번에 단차검수(INSPECT) → 압착보정(COMPACT).
+    테스트용으로 cycle_count(기본 2)만큼만 돌고 검수.
     """
     pattern_str, pattern_name = DESIGN_PATTERNS.get(design, DESIGN_PATTERNS[1])
-    print(f"\n[전체 시나리오] design={design} ({pattern_name}), 타일={tile_count}개")
+    print(f"\n[전체 시나리오] design={design} ({pattern_name}), 전체 타일={tile_count}개")
     print("웹 브라우저에서 http://127.0.0.1:8000 열어두세요!\n")
+
+    try:
+        cycle_count = int(input(f"  테스트 사이클 수 (기본 2, 최대 {tile_count}): ").strip() or "2")
+        cycle_count = max(1, min(cycle_count, tile_count))
+    except ValueError:
+        cycle_count = 2
+    print(f"  → {cycle_count}사이클 후 단차검수 진행\n")
 
     fb_reset()
     time.sleep(0.5)
 
-    for tile_idx in range(tile_count):
-        print(f"\n  ═══ 타일 {tile_idx + 1}/{tile_count} ═══")
-
+    # ── 1. 타일 파지→시멘트→부착 반복 ──
+    for tile_idx in range(cycle_count):
+        print(f"  ═══ 타일 {tile_idx + 1}/{cycle_count} (파지→시멘트→부착) ═══")
         for step in [1, 2, 3]:
             set_tile_step(step, tile_index=tile_idx, design=design)
-            time.sleep(1.2)
-
-        print(f"\n  ▶ INSPECT (tile_step=4) → 단차 검수 모달 확인!")
-        fb_update({"inspection_result": None})   # 먼저 초기화
-        set_tile_step(4, tile_index=tile_idx, design=design)
-        time.sleep(0.8)
-
-        # dummy.json 로드 (없으면 랜덤 샘플로 fallback)
-        dummy_path = os.path.expanduser(INSPECTION_JSON_PATH)
-        if os.path.exists(dummy_path):
-            with open(dummy_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-            payload["timestamp_sec"] = time.time()
-            info(f"dummy.json 로드 ({len(payload.get('tiles', []))}개 타일)")
-        else:
-            payload = make_sample_payload(tile_count=1)
-            payload["tiles"][0]["name"] = f"tile_{tile_idx + 1}"
-            info("dummy.json 없음 → 랜덤 샘플 사용")
-        post_result(payload)
-        time.sleep(0.5)
-
-        input(f"\n  타일 {tile_idx + 1} 검수 확인 후 엔터...")
-
-        set_tile_step(5, tile_index=tile_idx, design=design)
-        time.sleep(1.0)
-
+            time.sleep(0.8)
+        # 부착 완료
         set_tile_step(6, tile_index=tile_idx, design=design)
-        fb_update({
-            "completed_jobs": tile_idx + 1,
-            "tile_step": 0,
-        })
-        time.sleep(0.5)
+        fb_update({"completed_jobs": tile_idx + 1, "tile_step": 0})
+        time.sleep(0.3)
 
-    print(f"\n  ✅ 전체 시나리오 완료 ({tile_count}개 타일)")
+    # ── 2. 단차검수 (전체 한번에) ──
+    print(f"\n  ▶ INSPECT (tile_step=4) → {cycle_count}개 타일 단차검수 시작!")
+    fb_update({"inspection_result": None})
+    set_tile_step(4, tile_index=cycle_count - 1, design=design)
+    fb_update({"completed_jobs": cycle_count})
+    time.sleep(0.8)
+
+    dummy_path = os.path.expanduser(INSPECTION_JSON_PATH)
+    if os.path.exists(dummy_path):
+        with open(dummy_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        payload["timestamp_sec"] = time.time()
+        # tiles name을 pattern_1 ~ pattern_N 으로 맞춤
+        for i, t in enumerate(payload.get("tiles", [])):
+            t["name"] = f"pattern_{i + 1}"
+        info(f"dummy.json 로드 ({len(payload.get('tiles', []))}개 타일)")
+    else:
+        payload = make_sample_payload(tile_count=cycle_count)
+        for i, t in enumerate(payload["tiles"]):
+            t["name"] = f"pattern_{i + 1}"
+        info("dummy.json 없음 → 랜덤 샘플 사용")
+    post_result(payload)
+    time.sleep(0.5)
+
+    input(f"\n  단차검수 확인 후 엔터 (압착보정으로 진행)...")
+
+    # ── 3. 압착보정 ──
+    print(f"\n  ▶ COMPACT (tile_step=5) → 압착 보정")
+    set_tile_step(5, tile_index=cycle_count - 1, design=design)
+    time.sleep(1.0)
+
+    print(f"\n  ✅ 시나리오 완료 ({cycle_count}개 타일)")
     fb_update({"state": "작업 완료", "overall_progress": 1.0})
 
 # ── 메인 메뉴 ─────────────────────────────────────────────

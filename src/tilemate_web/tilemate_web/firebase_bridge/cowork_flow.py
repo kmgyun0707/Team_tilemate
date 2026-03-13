@@ -19,14 +19,28 @@ def _wait_for_keyword(stt, keywords: list, log_prefix: str, firebase_ref, logger
     """
     STT로 음성을 반복 수신하여 키워드 감지 시 True 반환.
     STT가 None이면 5초 대기 후 자동 진행.
+    Firebase robot_status/manual_confirm 이 True 이면 버튼 확인으로 즉시 진행.
     """
     if stt is None:
         logger.warn(f"[{log_prefix}] STT 없음. 5초 후 자동 진행합니다.")
         time.sleep(5.0)
         return True
 
+    # 수동 확인 플래그 초기화
+    firebase_ref.update({"manual_confirm": False})
+
     first_attempt = True
     while True:
+        # 버튼 수동 확인 체크
+        try:
+            snap = firebase_ref.get()
+            if snap and snap.get("manual_confirm") is True:
+                firebase_ref.update({"manual_confirm": False, "stt_mic_state": ""})
+                logger.info(f"[{log_prefix}] 수동 확인 버튼 → 진행")
+                return True
+        except Exception as e:
+            logger.warn(f"[{log_prefix}] manual_confirm 체크 오류 (무시): {e}")
+
         try:
             logger.info(f"[{log_prefix}] 🎙 음성 대기 중...")
             if first_attempt:

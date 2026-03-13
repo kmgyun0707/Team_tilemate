@@ -226,4 +226,4 @@ async def post_inspect_result(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("server:app", host="192.168.10.48", port=8000, reload=True)

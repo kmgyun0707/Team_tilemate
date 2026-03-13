@@ -209,6 +209,8 @@
             padding: 44px 48px;
             width: 460px;
             max-width: 95vw;
+            max-height: 90vh;
+            overflow-y: auto;
             text-align: center;
             box-shadow: 0 12px 48px rgba(0,0,0,0.3);
             animation: cement-modal-in 0.25s ease;
@@ -2226,81 +2228,102 @@
         }
     }
 
-    /* ── voice-popup FFT ── */
-    let _vFft = { ctx:null, analyser:null, stream:null, animId:null, data:null, mode:'calib' };
+    /* ── voice-popup FFT: 더미 애니메이션 (마이크 불필요) ── */
+    let _vFft = { animId:null, mode:'calib', phase:0, data:null };
 
-    async function startVoiceFFT(mode) {
+    function startVoiceFFT(mode) {
         _vFft.mode = mode;
-        if (_vFft.stream) return; // 스트림 재사용, 모드만 전환
-        try {
-            _vFft.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-            _vFft.ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const src = _vFft.ctx.createMediaStreamSource(_vFft.stream);
-            _vFft.analyser = _vFft.ctx.createAnalyser();
-            _vFft.analyser.fftSize = 2048; _vFft.analyser.smoothingTimeConstant = 0.8;
-            src.connect(_vFft.analyser);
-            _vFft.data = new Uint8Array(_vFft.analyser.frequencyBinCount);
-            _drawVoiceFFT();
-        } catch(e) { console.warn('[VoiceFFT] 마이크 접근 실패:', e); }
+        if (!_vFft.data) _vFft.data = new Uint8Array(256);
+        if (!_vFft.animId) _drawVoiceFFT();
     }
     function switchVoiceFFTMode(mode) { _vFft.mode = mode; }
     function stopVoiceFFT() {
-        if (_vFft.animId)   { cancelAnimationFrame(_vFft.animId); _vFft.animId = null; }
-        if (_vFft.stream)   { _vFft.stream.getTracks().forEach(t=>t.stop()); _vFft.stream = null; }
-        if (_vFft.ctx)      { _vFft.ctx.close(); _vFft.ctx = null; }
-        _vFft.analyser = null;
+        if (_vFft.animId) { cancelAnimationFrame(_vFft.animId); _vFft.animId = null; }
         ['fft-canvas-calib','fft-canvas'].forEach(id => { const c=document.getElementById(id); if(c) c.getContext('2d').clearRect(0,0,c.width,c.height); });
     }
     function _drawVoiceFFT() {
         _vFft.animId = requestAnimationFrame(_drawVoiceFFT);
-        if (!_vFft.analyser) return;
         const isCalib = _vFft.mode === 'calib';
         const canvas = document.getElementById(isCalib ? 'fft-canvas-calib' : 'fft-canvas');
         const other  = document.getElementById(isCalib ? 'fft-canvas' : 'fft-canvas-calib');
         if (!canvas) return;
-        if (other) other.getContext('2d').clearRect(0,0,other.width,other.height);
-        _vFft.analyser.getByteFrequencyData(_vFft.data);
-        _fftDraw(canvas.getContext('2d'), canvas.width, canvas.height, _vFft.data, _vFft.analyser.frequencyBinCount, _vFft.ctx.sampleRate, isCalib);
+        if (other) other.getContext('2d').clearRect(0, 0, other.width, other.height);
+        _vFft.phase += isCalib ? 0.018 : 0.032;
+        const bins = _vFft.data.length;
+        for (let i = 0; i < bins; i++) {
+            const freq = i / bins;
+            const base = Math.max(0, 90 - freq * 160);
+            const wave = Math.sin(_vFft.phase * 1.3 + i * 0.18) * 28
+                       + Math.sin(_vFft.phase * 2.1 + i * 0.07) * 18
+                       + Math.sin(_vFft.phase * 0.7 + i * 0.31) * 14;
+            const amp  = isCalib ? 0.55 : 1.0;
+            const noise = (Math.random() - 0.5) * (isCalib ? 12 : 22);
+            _vFft.data[i] = Math.max(0, Math.min(255, Math.round((base + wave + noise) * amp)));
+        }
+        _fftDraw(canvas.getContext('2d'), canvas.width, canvas.height, _vFft.data, _vFft.data.length, 44100, isCalib);
     }
 
     /* ── cement-modal FFT ── */
     let _cFft = { ctx:null, analyser:null, stream:null, animId:null, data:null, canvasId:null };
 
-    async function startCementFFT(canvasId) {
-        _cFft.canvasId = canvasId;
-        if (_cFft.stream) return; // 스트림 재사용
-        try {
-            _cFft.stream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-            _cFft.ctx = new (window.AudioContext || window.webkitAudioContext)();
-            const src = _cFft.ctx.createMediaStreamSource(_cFft.stream);
-            _cFft.analyser = _cFft.ctx.createAnalyser();
-            _cFft.analyser.fftSize = 2048; _cFft.analyser.smoothingTimeConstant = 0.8;
-            src.connect(_cFft.analyser);
-            _cFft.data = new Uint8Array(_cFft.analyser.frequencyBinCount);
-            _drawCementFFT();
-        } catch(e) { console.warn('[CementFFT] 마이크 접근 실패:', e); }
+    /* ── cement-modal FFT: 더미 애니메이션 (마이크 불필요) ── */
+    let _cFftDummyData = null; // 더미 스펙트럼 데이터 (256 bins)
+    let _cFftDummyPhase = 0;   // 애니메이션 위상
+
+    function _initCementDummyData() {
+        if (_cFftDummyData) return;
+        _cFftDummyData = new Uint8Array(256);
     }
-    function switchCementFFTCanvas(canvasId) { _cFft.canvasId = canvasId; }
+
+    function _updateCementDummyData(isCalib) {
+        _initCementDummyData();
+        _cFftDummyPhase += isCalib ? 0.018 : 0.032;
+        const bins = _cFftDummyData.length;
+        for (let i = 0; i < bins; i++) {
+            const freq = i / bins;
+            // 주파수 분포 모양 (낮은 주파수 강조)
+            const base  = Math.max(0, 90 - freq * 160);
+            // 여러 사인파를 합성해서 자연스러운 스펙트럼처럼 보이게
+            const wave  = Math.sin(_cFftDummyPhase * 1.3 + i * 0.18) * 28
+                        + Math.sin(_cFftDummyPhase * 2.1 + i * 0.07) * 18
+                        + Math.sin(_cFftDummyPhase * 0.7 + i * 0.31) * 14;
+            // listening 상태면 더 활발하게
+            const amp   = isCalib ? 0.55 : 1.0;
+            const noise = (Math.random() - 0.5) * (isCalib ? 12 : 22);
+            _cFftDummyData[i] = Math.max(0, Math.min(255,
+                Math.round((base + wave + noise) * amp)
+            ));
+        }
+    }
+
+    function startCementFFT(canvasId) {
+        _cFft.canvasId = canvasId;
+        _initCementDummyData();
+        if (!_cFft.animId) _drawCementFFT();
+    }
+    function switchCementFFTCanvas(canvasId) {
+        _cFft.canvasId = canvasId;
+        if (!_cFft.animId) _drawCementFFT();
+    }
     function stopCementFFT() {
-        if (_cFft.animId)   { cancelAnimationFrame(_cFft.animId); _cFft.animId = null; }
-        if (_cFft.stream)   { _cFft.stream.getTracks().forEach(t=>t.stop()); _cFft.stream = null; }
-        if (_cFft.ctx)      { _cFft.ctx.close(); _cFft.ctx = null; }
-        _cFft.analyser = null; _cFft.canvasId = null;
+        if (_cFft.animId) { cancelAnimationFrame(_cFft.animId); _cFft.animId = null; }
+        _cFft.canvasId = null;
         ['cement-fft-pick-calib','cement-fft-pick-listen','cement-fft-cement-calib','cement-fft-cement-listen'].forEach(id => {
-            const c=document.getElementById(id); if(c) c.getContext('2d').clearRect(0,0,c.width,c.height);
+            const c = document.getElementById(id); if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
         });
     }
     function _drawCementFFT() {
         _cFft.animId = requestAnimationFrame(_drawCementFFT);
-        if (!_cFft.analyser || !_cFft.canvasId) return;
+        if (!_cFft.canvasId) return;
         const canvas = document.getElementById(_cFft.canvasId);
         if (!canvas) return;
         ['cement-fft-pick-calib','cement-fft-pick-listen','cement-fft-cement-calib','cement-fft-cement-listen'].forEach(id => {
-            if (id !== _cFft.canvasId) { const c=document.getElementById(id); if(c) c.getContext('2d').clearRect(0,0,c.width,c.height); }
+            if (id !== _cFft.canvasId) { const c = document.getElementById(id); if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height); }
         });
-        _cFft.analyser.getByteFrequencyData(_cFft.data);
         const isCalib = _cFft.canvasId.includes('calib');
-        _fftDraw(canvas.getContext('2d'), canvas.width, canvas.height, _cFft.data, _cFft.analyser.frequencyBinCount, _cFft.ctx.sampleRate, isCalib);
+        _updateCementDummyData(isCalib);
+        // sampleRate 44100 고정으로 _fftDraw 재사용
+        _fftDraw(canvas.getContext('2d'), canvas.width, canvas.height, _cFftDummyData, _cFftDummyData.length, 44100, isCalib);
     }
 
     function showVoiceState(state) {
@@ -2553,9 +2576,21 @@
     async function openInspectionModal() {
         const modal = document.getElementById('inspection-modal');
         modal.style.display = 'flex';
+
         if (!_inspInitialized) {
+            // display:flex 적용 후 DOM 레이아웃이 확정될 때까지 한 프레임 대기
+            await new Promise(resolve => requestAnimationFrame(resolve));
             await _initInsp3D();
+        } else {
+            // 이미 초기화됐지만 크기가 0이면 (모달 닫혔다 다시 열린 경우) 리사이즈
+            const container = document.getElementById('insp-three-container');
+            if (_inspRenderer && container.clientWidth > 0) {
+                _inspCamera.aspect = container.clientWidth / container.clientHeight;
+                _inspCamera.updateProjectionMatrix();
+                _inspRenderer.setSize(container.clientWidth, container.clientHeight);
+            }
         }
+
         // API에서 최신 데이터 fetch 후 렌더링
         await _fetchAndApplyInspection();
         if (_lastInspectionData) {
@@ -2582,13 +2617,43 @@
     function _judgeInspectionResult(inspData) {
         if (!inspData || !inspData.tiles || inspData.tiles.length === 0) return;
 
-        const TILT_WARN      = 2.0;
-        const TILT_THRESHOLD = 5.0;
+        // ── report_page와 동일한 기준 ──
+        const DZ_WARN  = 3.0;  // mm
+        const DZ_BAD   = 6.0;  // mm
+        const TILT_WARN  = 2.0; // °
+        const TILT_BAD   = 5.0; // °
 
-        // tiles 배열의 각 항목을 name으로 그리드 타일에 매핑
-        // name 패턴: "pattern_1" ~ "pattern_9" 또는 "tile_1" ~ "tile_9"
+        // ── wall 기준 평면 (report_page: loadWallRefFromData 동일) ──
+        let wallRef = null;
+        if (inspData.wall) {
+            const wn = inspData.wall.plane_normal || inspData.wall.normal || [0, 0, 1];
+            const wc = inspData.wall.plane_centroid_mm
+                    || (inspData.wall.centroid_m   ? inspData.wall.centroid_m.map(v => v * 1000) : null)
+                    || (inspData.wall.center_point_m ? inspData.wall.center_point_m.map(v => v * 1000) : null);
+            if (Array.isArray(wn) && Array.isArray(wc)) {
+                wallRef = {
+                    n: [Number(wn[0]), Number(wn[1]), Number(wn[2])],
+                    p: [Number(wc[0]), Number(wc[1]), Number(wc[2])]
+                };
+            }
+        }
+
+        // ── 부호 있는 단차(mm) 계산 (report_page: signedDistanceToWallPlaneMm 동일) ──
+        function _signedDz(centroidMm) {
+            if (!wallRef || !Array.isArray(centroidMm)) return NaN;
+            const [nx, ny, nz] = wallRef.n;
+            const [px, py, pz] = wallRef.p;
+            const nNorm = Math.hypot(nx, ny, nz) || 1;
+            return (nx*(centroidMm[0]-px) + ny*(centroidMm[1]-py) + nz*(centroidMm[2]-pz)) / nNorm;
+        }
+
+        // ── tilt 계산 (report_page: tiltDeg 동일 — roll/pitch만) ──
+        function _tilt(rpy) {
+            return Math.max(Math.abs(Number(rpy?.[0] ?? 0)), Math.abs(Number(rpy?.[1] ?? 0)));
+        }
+
         inspData.tiles.forEach((tile, idx) => {
-            // name에서 번호 추출, 없으면 순서(idx+1) 사용
+            // name에서 번호 추출
             let tileId = null;
             const m = String(tile.name || '').match(/(\d+)$/);
             if (m) tileId = parseInt(m[1]);
@@ -2597,45 +2662,76 @@
             const tileEl = document.getElementById(`tile-${tileId}`);
             if (!tileEl) return;
 
-            const rpy     = tile.rpy_deg || [0, 0, 0];
-            const roll    = Math.abs(parseFloat(rpy[0]) || 0);
-            const pitch   = Math.abs(parseFloat(rpy[1]) || 0);
-            const yaw     = Math.abs(parseFloat(rpy[2]) || 0);
-            const maxTilt = Math.max(roll, pitch, yaw);
+            // 단차 계산
+            const centroidMm = Array.isArray(tile.plane_centroid_mm)
+                ? tile.plane_centroid_mm.map(Number)
+                : Array.isArray(tile.centroid_m)
+                    ? tile.centroid_m.map(v => Number(v) * 1000)
+                    : null;
+            const dz    = centroidMm ? _signedDz(centroidMm) : NaN;
+            const dzAbs = Number.isFinite(dz) ? Math.abs(dz) : NaN;
+
+            // tilt 계산 (roll/pitch만, yaw 제외)
+            const tilt = _tilt(tile.rpy_deg);
+
+            // 판정 (report_page classify 동일)
+            const dzBad   = Number.isFinite(dzAbs) && dzAbs >= DZ_BAD;
+            const dzWarn  = Number.isFinite(dzAbs) && dzAbs >= DZ_WARN;
+            const tiltBad = tilt >= TILT_BAD;
+            const tiltWarn = tilt >= TILT_WARN;
 
             tileEl.classList.remove(
                 'working', 'coated', 'running', 'finished',
                 'result-good', 'result-rmse-bad', 'result-rmse-warn',
                 'result-tilt-bad', 'result-both-bad'
             );
-            tileEl.style.backgroundImage = ''; tileEl.style.backgroundColor = '';
-            tileEl.style.borderColor = ''; tileEl.style.color = '';
+            tileEl.style.backgroundImage = '';
+            tileEl.style.backgroundColor = '';
+            tileEl.style.borderColor = '';
+            tileEl.style.color = '';
 
-            if (maxTilt >= TILT_THRESHOLD) {
-                tileEl.classList.add('result-tilt-bad');
-                tileEl.innerText = `기울기 불량
-${maxTilt.toFixed(1)}°`;
-                tileState[tileId] = 'result-tilt-bad';
-            } else if (maxTilt >= TILT_WARN) {
-                tileEl.classList.add('result-rmse-warn');
-                tileEl.innerText = `기울기 주의
-${maxTilt.toFixed(1)}°`;
-                tileState[tileId] = 'result-rmse-warn';
+            let cls, label;
+            if (dzBad && tiltBad) {
+                cls = 'result-both-bad';
+                label = `복합 불량
+dz:${Number.isFinite(dz)?dz.toFixed(1):'-'}mm ${tilt.toFixed(1)}°`;
+            } else if (dzBad) {
+                cls = 'result-rmse-bad';
+                label = `단차 불량
+${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
+            } else if (tiltBad) {
+                cls = 'result-tilt-bad';
+                label = `기울기 불량
+${tilt.toFixed(1)}°`;
+            } else if (dzWarn || tiltWarn) {
+                cls = 'result-rmse-warn';
+                const parts = [];
+                if (dzWarn) parts.push(`dz:${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`);
+                if (tiltWarn) parts.push(`${tilt.toFixed(1)}°`);
+                label = `주의
+${parts.join(' ')}`;
             } else {
-                tileEl.classList.add('result-good');
-                tileEl.innerText = `정상
-${maxTilt.toFixed(1)}°`;
-                tileState[tileId] = 'result-good';
+                cls = 'result-good';
+                label = `정상
+${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
             }
 
+            tileEl.classList.add(cls);
+            tileEl.innerText = label;
+            tileState[tileId] = cls;
+
+            // 3D 타일 — 실제 기울기 적용 + 단차만큼 z 이동 (튀어나옴)
             const mesh3d = tiles3D[tileId - 1];
             if (mesh3d) {
                 const DEG = Math.PI / 180;
+                const rpy = tile.rpy_deg || [0, 0, 0];
                 mesh3d.rotation.order = 'YXZ';
-                mesh3d.rotation.z = roll  * DEG;
-                mesh3d.rotation.x = pitch * DEG;
-                mesh3d.rotation.y = yaw   * DEG;
-                mesh3d.position.z = -0.005 + Math.min(maxTilt * 0.01, 0.1);
+                mesh3d.rotation.x = -Number(rpy[0]) * DEG; // roll (부호 반전: 좌표계 보정)
+                mesh3d.rotation.y = -Number(rpy[1]) * DEG; // pitch (부호 반전: 좌표계 보정)
+                mesh3d.rotation.z = 0;                     // yaw는 3D 표현에서 제외
+                // 단차만큼 z축으로 이동 (wall 기준, mm→씬 단위 스케일)
+                const dzScene = Number.isFinite(dz) ? dz * 0.0008 : 0;
+                mesh3d.position.z = dzScene;
             }
         });
     }
@@ -2682,6 +2778,7 @@ ${maxTilt.toFixed(1)}°`;
         _inspControls.dampingFactor = 0.06;
 
         _inspWorldGroup = new THREE.Group();
+        _inspWorldGroup.rotation.x = Math.PI; // X축 180도 회전 (뒤집힘 보정)
         _inspScene.add(_inspWorldGroup);
 
         _animateInsp();
@@ -2787,35 +2884,70 @@ ${maxTilt.toFixed(1)}°`;
         if (!obj.plane_centroid_mm && !obj.plane_normal) return;
 
         const isWall = (obj.name === 'wall');
-        const color = isWall ? [1.0, 0.75, 0.1] : [0.13, 0.77, 0.36]; // wall=노랑, tile=초록
-        const c = (obj.plane_centroid_mm || [0, 0, 0]).map(v => v / 1000); // mm → m
-        const n = obj.plane_normal || [0, 0, 1];
+        const color = isWall ? [1.0, 0.75, 0.1] : [0.13, 0.77, 0.36];
 
-        // 타일 크기: size_uv 기준 (1px ≈ 0.8mm), 없으면 80mm
-        const su = obj.size_uv ? (obj.size_uv[0] * 0.0008) : 0.08;
-        const sv = obj.size_uv ? (obj.size_uv[1] * 0.0008) : 0.08;
+        // ── 크기 계산 (report_page와 동일 방식) ──
+        let su, sv;
+        if (obj.plane_size_m?.width && obj.plane_size_m?.height) {
+            su = Number(obj.plane_size_m.width);
+            sv = Number(obj.plane_size_m.height);
+        } else if (Array.isArray(obj.size_uv)) {
+            su = Math.max(0.05, Number(obj.size_uv[0]) / 1000);
+            sv = Math.max(0.05, Number(obj.size_uv[1]) / 1000);
+        } else {
+            su = isWall ? 0.30 : 0.09;
+            sv = isWall ? 0.22 : 0.09;
+        }
+
+        // ── centroid (mm → m) ──
+        let c;
+        if (Array.isArray(obj.centroid_m))        c = obj.centroid_m.map(Number);
+        else if (Array.isArray(obj.center_point_m)) c = obj.center_point_m.map(Number);
+        else c = (obj.plane_centroid_mm || [0, 0, 0]).map(v => Number(v) / 1000);
+
+        // ── normal + quaternion ──
+        const nArr = obj.plane_normal || obj.normal || [0, 0, 1];
+        const nVec = new THREE.Vector3(Number(nArr[0]||0), Number(nArr[1]||0), Number(nArr[2]||1)).normalize();
+        const qNormal = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), nVec);
+        let qFinal = qNormal;
+        if (obj.rpy_deg) {
+            const DEG = Math.PI / 180;
+            const e = new THREE.Euler(
+                obj.rpy_deg[0] * DEG,
+                obj.rpy_deg[1] * DEG,
+                obj.rpy_deg[2] * DEG, 'XYZ'
+            );
+            qFinal = qNormal.multiply(new THREE.Quaternion().setFromEuler(e));
+        }
 
         // 평면 메시
         const geo = new THREE.PlaneGeometry(su, sv);
         const mat = new THREE.MeshPhongMaterial({
             color: new THREE.Color(color[0], color[1], color[2]),
-            side: THREE.DoubleSide, transparent: true, opacity: 0.55,
+            side: THREE.DoubleSide, transparent: true,
+            opacity: isWall ? 0.28 : 0.65,
             wireframe: _inspWireframe,
         });
         const plane = new THREE.Mesh(geo, mat);
-        plane.quaternion.setFromUnitVectors(
-            new THREE.Vector3(0, 0, 1),
-            new THREE.Vector3(...n).normalize()
-        );
+        plane.quaternion.copy(qFinal);
         plane.position.set(...c);
         _inspMeshes.push(plane);
         group.add(plane);
 
+        // 엣지라인
+        const edge = new THREE.LineSegments(
+            new THREE.EdgesGeometry(geo),
+            new THREE.LineBasicMaterial({ color: isWall ? 0xffd54f : 0x69f0ae, transparent: true, opacity: 0.5 })
+        );
+        edge.quaternion.copy(qFinal);
+        edge.position.set(...c);
+        group.add(edge);
+
         // 법선 화살표
-        group.add(_inspMakeArrow(c, n, color));
+        group.add(_inspMakeArrow(c, nArr, color, Math.max(su, sv) * 0.5));
 
         // 중심 구
-        const sg = new THREE.SphereGeometry(0.004, 12, 12);
+        const sg = new THREE.SphereGeometry(isWall ? 0.006 : 0.004, 12, 12);
         const sm = new THREE.MeshStandardMaterial({ color: new THREE.Color(color[0], color[1], color[2]) });
         const sphere = new THREE.Mesh(sg, sm);
         sphere.position.set(...c);
@@ -2948,6 +3080,24 @@ ${maxTilt.toFixed(1)}°`;
             if (!data || !Array.isArray(data.tiles)) {
                 _lastInspectionData = null;
                 return;
+            }
+
+            // wall 데이터가 없으면 /wall.json에서 보완
+            if (!data.wall) {
+                try {
+                    const wallRes = await fetch('/wall.json', { cache: 'no-store' });
+                    if (wallRes.ok) {
+                        const wallData = await wallRes.json();
+                        if (wallData && wallData.wall) {
+                            data.wall = wallData.wall;
+                        } else if (wallData && wallData.plane_normal) {
+                            // wall.json 자체가 wall 오브젝트인 경우
+                            data.wall = wallData;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[INSPECT] wall.json fetch 실패 (무시):', e);
+                }
             }
 
             // 항상 캐시에 저장 (모달 닫힐 때 즉시 판정에 사용)
@@ -3176,7 +3326,10 @@ ${maxTilt.toFixed(1)}°`;
         closeReportModal();
         const modal = document.getElementById('inspection-modal');
         modal.style.display = 'flex';
-        if (!_inspInitialized) await _initInsp3D();
+        if (!_inspInitialized) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await _initInsp3D();
+        }
         await _fetchAndApplyInspection();
         if (_lastInspectionData) renderInspectionData(_lastInspectionData);
     });
@@ -3186,7 +3339,10 @@ ${maxTilt.toFixed(1)}°`;
         closeReportModal();
         const modal = document.getElementById('inspection-modal');
         modal.style.display = 'flex';
-        if (!_inspInitialized) await _initInsp3D();
+        if (!_inspInitialized) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await _initInsp3D();
+        }
         await _fetchAndApplyInspection();
         if (_lastInspectionData) renderInspectionData(_lastInspectionData);
     });

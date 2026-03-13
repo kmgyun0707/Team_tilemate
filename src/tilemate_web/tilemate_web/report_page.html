@@ -831,6 +831,23 @@
         throw new Error('tiles 필드가 없습니다.');
       }
 
+      // wall 데이터가 없으면 /wall.json에서 보완
+      if (!data.wall) {
+        try {
+          const wallRes = await fetch('/wall.json', { cache: 'no-store' });
+          if (wallRes.ok) {
+            const wallData = await wallRes.json();
+            if (wallData?.wall) {
+              data.wall = wallData.wall;
+            } else if (wallData?.plane_normal || wallData?.normal) {
+              data.wall = wallData;
+            }
+          }
+        } catch (e) {
+          console.warn('[INSPECT] wall.json fetch 실패 (무시):', e);
+        }
+      }
+
       const sig = signature(data);
       if (!force && sig === state.lastSig) {
         el('statusLine').textContent = 'same payload, skipped';
@@ -1135,6 +1152,7 @@
       _inspScene.add(axes);
 
       _inspWorldGroup = new THREE.Group();
+      _inspWorldGroup.rotation.x = Math.PI; // X축 180도 회전 (뒤집힘 보정)
       _inspScene.add(_inspWorldGroup);
 
       function animate() {

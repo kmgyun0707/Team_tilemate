@@ -40,8 +40,9 @@ class YoloTwoStageNode(Node):
         # ==========================================
         # 🧠 1. 두 개의 모델 로드
         # ==========================================
-        obb_model_path = os.path.join(pkg_share_dir, 'yolo26s-obb_v5.pt')
-        cls_model_path = os.path.join(pkg_share_dir, 'yolov8n-cls_v1.pt')
+  
+        obb_model_path = os.path.join(pkg_share_dir, 'resource', 'yolo26s-obb_v5.pt')
+        cls_model_path = os.path.join(pkg_share_dir, 'resource', 'yolov8n-cls_v1.pt')
   
         try:
             self.obb_model = YOLO(obb_model_path)

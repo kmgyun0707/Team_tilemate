@@ -893,10 +893,22 @@
     let _inspInitialized = false;
     let _inspAnimId = null;
 
-    function openInspectionModal() {
+    async function openInspectionModal() {
       el('inspection-modal').style.display = 'flex';
-      if (!_inspInitialized) _initInsp3D();
-      if (state.data && _inspInitialized) renderInspectionData(state.data);
+      if (!_inspInitialized) {
+        // display:flex 적용 후 DOM 레이아웃이 확정될 때까지 한 프레임 대기
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        await _initInsp3D();
+      } else {
+        // 이미 초기화됐지만 크기 재계산 필요한 경우
+        const container = el('insp-three-container');
+        if (_inspRenderer && container.clientWidth > 0) {
+          _inspCamera.aspect = container.clientWidth / container.clientHeight;
+          _inspCamera.updateProjectionMatrix();
+          _inspRenderer.setSize(container.clientWidth, container.clientHeight);
+        }
+      }
+      if (state.data) renderInspectionData(state.data);
     }
 
     function closeInspectionModal() {
@@ -1261,9 +1273,9 @@
 
     el('open3dBtn').addEventListener('click', openInspectionModal);
 
-    el('force3dBtn').addEventListener('click', () => {
+    el('force3dBtn').addEventListener('click', async () => {
       if (!state.data) return;
-      openInspectionModal();
+      await openInspectionModal();
       renderInspectionData(state.data);
     });
 

@@ -1046,7 +1046,7 @@
         <div class="popup-box" style="width: 480px;">
             <h2>🎨 커스텀 패턴 입력</h2>
             <p style="text-align:center; color:#555; margin-bottom: 20px;">
-                각 타일에 <strong>A</strong> (검정) 또는 <strong>B</strong> (흰색) 를 입력하세요.<br>
+                각 타일을 클릭해서 <strong>흰색</strong> / <strong>검정</strong> / <strong>데코</strong> 를 선택하세요.<br>
                 <small style="color:#999;">순서: 왼쪽→오른쪽, 위→아래 (9칸)</small>
             </p>
 
@@ -1252,6 +1252,15 @@
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
 
 <script>
+    // ── 전역 단일 SSE 연결 (중복 연결 방지) ──
+    window._globalEs = null;
+    try {
+        window._globalEs = new EventSource('/api/inspect/events');
+        window._globalEs.onerror = (e) => { console.warn('[SSE] 연결 오류, 재연결 대기 중...', e); };
+    } catch (err) {
+        console.warn('[SSE] 사용 불가:', err);
+    }
+
     let database;
     
     const firebaseConfig = {
@@ -1752,8 +1761,16 @@
     function confirmDesign() {
         if (!selectedDesign) { alert('패턴을 선택해주세요!'); return; }
         if (selectedDesign === 3) {
-            document.getElementById('design-popup').classList.remove('show');
-            openCustomPatternPopup(); return;
+            // 데코타일 선택 시 커스텀 팝업 없이 전부 1로 즉시 전송
+            const allOnes = '1,1,1,1,1,1,1,1,1';
+            closePopup();
+            database.ref('robot_command').set({ action: 'start', design: 3, custom_pattern: allOnes, is_resume: false, timestamp: Date.now() });
+            DESIGN_COLORS[3] = new Array(9).fill('W');
+            const allA = new Array(9).fill('A');
+            isStarted = true; showCustomPatternPreview(allA);
+            speakTTS('작업을 시작합니다');
+            if (!timerInterval) startTimer();
+            return;
         }
         closePopup();
         database.ref('robot_command').set({ action: 'start', design: selectedDesign, is_resume: false, timestamp: Date.now() });
@@ -1773,12 +1790,11 @@
             const label = document.createElement('div'); label.style.cssText = 'font-size:0.8em; color:#888;'; label.innerText = `타일 ${i+1}`;
             const btn = document.createElement('button');
             btn.id = `custom-btn-${i}`;
-            btn.style.cssText = `width: 60px; height: 60px; font-size: 1.4em; font-weight: bold; border-radius: 10px; cursor: pointer; border: 3px solid; transition: 0.2s; flex: unset; padding: 0;`;
-            btn.innerText = customValues[i];
+            btn.style.cssText = `width: 64px; height: 64px; font-size: 0.88em; font-weight: bold; border-radius: 10px; cursor: pointer; border: 3px solid; transition: 0.2s; flex: unset; padding: 0;`;
             applyCustomBtnStyle(btn, customValues[i]);
             btn.onclick = () => {
-                customValues[i] = customValues[i] === 'A' ? 'B' : 'A';
-                btn.innerText = customValues[i];
+                const cycle = { 'A': 'B', 'B': 'C', 'C': 'A' };
+                customValues[i] = cycle[customValues[i]] || 'A';
                 applyCustomBtnStyle(btn, customValues[i]);
                 updateCustomPreview();
             };
@@ -1791,8 +1807,13 @@
     function applyCustomBtnStyle(btn, val) {
         if (val === 'B') {
             btn.style.background = '#212121'; btn.style.color = '#fff'; btn.style.borderColor = '#000';
+            btn.innerText = '검정';
+        } else if (val === 'C') {
+            btn.style.background = '#d4a96a'; btn.style.color = '#fff'; btn.style.borderColor = '#a0784a';
+            btn.innerText = '데코';
         } else {
             btn.style.background = '#ffffff'; btn.style.color = '#333'; btn.style.borderColor = '#aaa';
+            btn.innerText = '흰색';
         }
     }
 
@@ -1801,12 +1822,16 @@
         pg.innerHTML = '';
         customValues.forEach(v => {
             const cell = document.createElement('div');
-            cell.className = 'preview-cell ' + (v === 'B' ? 'pc-black' : '');
+            cell.className = 'preview-cell';
+            if (v === 'B') cell.style.background = '#212121';
+            else if (v === 'C') cell.style.background = '#d4a96a';
+            else cell.style.background = '#ffffff';
             pg.appendChild(cell);
         });
     }
 
     function confirmCustomPattern() {
+        // A=흰색, B=검정, C=데코
         const patternStr = customValues.join(',');
         closePopup();
         database.ref('robot_command').set({ action: 'start', design: 3, custom_pattern: patternStr, is_resume: false, timestamp: Date.now() });
@@ -1919,7 +1944,8 @@
        WebSocket 카메라 스트림
        로봇PC_IP 를 실제 IP로 수정하세요 (예: 192.168.0.10)
        ════════════════════════════════════════════════════════ */
-    const WS_URL = 'ws://192.168.10.39:8765'; 
+    //const WS_URL = 'ws://192.168.10.39:8765'; 
+    const WS_URL = 'ws://172.20.10.2:8765'; 
     /* 중요!!!!!!!!!!!!!!!!!!!!!!!!! 로봇에서 web키면 192.168.10.39로 바꾸기*/
 
     let ws = null;
@@ -3116,17 +3142,11 @@ ${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
     // 페이지 로드 시 최신 결과 한 번 가져오기
     _fetchAndApplyInspection();
 
-    // SSE로 새 결과 수신 시 자동 갱신
-    try {
-        const _inspEs = new EventSource('/api/inspect/events');
-        _inspEs.addEventListener('inspect_updated', () => {
+    // SSE로 새 결과 수신 시 자동 갱신 (전역 단일 SSE 사용)
+    if (window._globalEs) {
+        window._globalEs.addEventListener('inspect_updated', () => {
             _fetchAndApplyInspection();
         });
-        _inspEs.onerror = (e) => {
-            console.warn('[INSPECT] SSE 연결 오류, 재연결 대기 중...', e);
-        };
-    } catch (err) {
-        console.warn('[INSPECT] SSE 사용 불가:', err);
     }
 
     // ══════════════════════════════════════════════════
@@ -3357,10 +3377,9 @@ ${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
     // 페이지 로드 시 보고서 버튼 표시
     document.getElementById('btn-report').style.display = 'block';
 
-    // SSE로 inspection 업데이트 시 보고서도 자동 갱신
-    try {
-        const rpEs = new EventSource('/api/inspect/events');
-        rpEs.addEventListener('inspect_updated', async () => {
+    // SSE로 inspection 업데이트 시 보고서도 자동 갱신 (전역 단일 SSE 사용)
+    if (window._globalEs) {
+        window._globalEs.addEventListener('inspect_updated', async () => {
             try {
                 await rpFetchLatest(true);
                 // 보고서 모달 열려있으면 갱신
@@ -3369,7 +3388,7 @@ ${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
                 }
             } catch (err) { console.error('report SSE error:', err); }
         });
-    } catch (err) { console.warn('report SSE not available', err); }
+    }
 
 </script>
 </body>

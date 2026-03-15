@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
+import argparse
 import asyncio
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,14 +19,37 @@ LATEST_PATH = DATA_DIR / "latest.json"
 HISTORY_DIR = DATA_DIR / "history"
 HISTORY_DIR.mkdir(exist_ok=True)
 
-CONFIG_DIR = BASE_DIR.parents[0] / "config"
+def _resolve_config_dir() -> Path:
+    candidates = [
+        BASE_DIR / "config",
+        BASE_DIR.parent / "config",
+        BASE_DIR.parents[1] / "src" / "tilemate_web" / "config",
+    ]
+
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        candidates.append(Path(get_package_share_directory("tilemate_web")) / "config")
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return BASE_DIR.parent / "config"
+
+
+CONFIG_DIR = _resolve_config_dir()
 WALL_JSON_PATH = CONFIG_DIR / "wall.json"
 DUMMY_PATH = CONFIG_DIR / "dummy.json"
 
 
 app = FastAPI(title="Wall Tile Inspection Web")
-STATIC_DIR = BASE_DIR / "static"
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+DEFAULT_HOST = os.getenv("TILEMATE_WEB_HOST", "0.0.0.0")
+DEFAULT_PORT = int(os.getenv("TILEMATE_WEB_PORT", "8000"))
+
 # SSE 구독자별 큐
 subscribers: list[asyncio.Queue] = []
 
@@ -103,54 +127,27 @@ async def generate_dummy():
         "latest_path": str(LATEST_PATH),
         "history_path": str(history_path),
     }
-latest_data = {}
-
-#########for debug
-@app.post("/api/inspect/latest")
-async def set_latest(data: dict):
-    global latest_data
-    latest_data = data
-
-    event_data = {
-        "type": "inspect_updated",
-        "payload": data
-    }
-
-    for q in subscribers[:]:
-        try:
-            q.put_nowait(event_data)
-        except Exception:
-            if q in subscribers:
-                subscribers.remove(q)
-
-    return {"status": "stored"}
 @app.get("/api/inspect/latest")
 async def get_latest():
-    return latest_data
-########
+    if LATEST_PATH.exists():
+        with open(LATEST_PATH, "r", encoding="utf-8") as f:
+            return JSONResponse(json.load(f))
 
+    if DUMMY_PATH.exists():
+        with open(DUMMY_PATH, "r", encoding="utf-8") as f:
+            return JSONResponse(json.load(f))
 
-# @app.get("/api/inspect/latest")
-# async def get_latest():
-#     if LATEST_PATH.exists():
-#         with open(LATEST_PATH, "r", encoding="utf-8") as f:
-#             return JSONResponse(json.load(f))
-
-#     if DUMMY_PATH.exists():
-#         with open(DUMMY_PATH, "r", encoding="utf-8") as f:
-#             return JSONResponse(json.load(f))
-
-#     return JSONResponse(
-#         {
-#             "success": False,
-#             "message": "no inspection result yet",
-#             "frame_id": "-",
-#             "timestamp_sec": 0,
-#             "wall": None,
-#             "tiles": [],
-#         },
-#         status_code=200,
-#     )
+    return JSONResponse(
+        {
+            "success": False,
+            "message": "no inspection result yet",
+            "frame_id": "-",
+            "timestamp_sec": 0,
+            "wall": None,
+            "tiles": [],
+        },
+        status_code=200,
+    )
 # @app.get("/api/inspect/latest")
 # async def get_latest():
 #     # if not LATEST_PATH.exists():
@@ -254,14 +251,23 @@ async def post_inspect_result(request: Request):
     }
 
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description="Tilemate FastAPI server")
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--reload", action="store_true")
+    args = parser.parse_args()
+
     uvicorn.run(
-        "server:app",
-        host="192.168.10.48",
-        port=8000,
-        reload=True,
+        "tilemate_web.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
         reload_excludes=["keyword_extraction.py", "STT.py"],
     )
 
+
+if __name__ == "__main__":
+    main()
+
 #host="192.168.10.48"
-#host="127.0.0.1" #내꺼면

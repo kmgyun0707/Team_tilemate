@@ -8,13 +8,13 @@ ExecuteJob 액션 클라이언트 처리:
 
 import threading
 import time
+import os
 import requests
 
 from tilemate_msgs.action import ExecuteJob
 from .constants import DESIGN_PATTERNS, TILE_SYMBOL_MAP
 
-#FASTAPI_BASE_URL = "http://172.20.10.3:8000"
-FASTAPI_BASE_URL = "http://192.168.10.48:8000"
+FASTAPI_BASE_URL = os.getenv("TILEMATE_FASTAPI_BASE_URL", "http://127.0.0.1:8000")
 
 
 class ActionHandlerMixin:
@@ -39,9 +39,17 @@ class ActionHandlerMixin:
         tokens = [x.strip().upper() for x in pattern_str.split(",") if x.strip()]
         layout = []
         for t in tokens:
-            if t not in TILE_SYMBOL_MAP:
-                raise ValueError(f"Unknown tile symbol: {t}")
-            layout.append(TILE_SYMBOL_MAP[t])
+            if t in TILE_SYMBOL_MAP:
+                layout.append(TILE_SYMBOL_MAP[t])
+                continue
+
+            if t.isdigit():
+                value = int(t)
+                if value in (1, 2, 3):
+                    layout.append(value)
+                    continue
+
+            raise ValueError(f"Unknown tile symbol: {t}")
         return layout
 
     @staticmethod

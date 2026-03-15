@@ -180,7 +180,36 @@ class FirebaseBridgeNode(ActionHandlerMixin, SensorHandlerMixin, CoworkFlowMixin
             self._send_task_job_goal(cmd, is_resume=bool(cmd.get("is_resume", False)))
 
         elif action == "resume":
-            self._send_task_job_goal(cmd, is_resume=True)
+            # 웹/외부 클라이언트가 resume에 최소 필드만 보낼 수 있으므로
+            # robot_status 값을 보강해 재개 goal 생성 실패를 방지.
+            status = {}
+            try:
+                snap = self.ref.get()
+                if isinstance(snap, dict):
+                    status = snap
+            except Exception as e:
+                self.get_logger().warn(f"[RESUME] robot_status 조회 실패 (무시): {e}")
+
+            resume_cmd = dict(cmd) if isinstance(cmd, dict) else {}
+
+            if "design" not in resume_cmd:
+                resume_cmd["design"] = int(status.get("design", 0))
+
+            if int(resume_cmd.get("design", 0)) == 3 and not str(resume_cmd.get("custom_pattern", "")).strip():
+                resume_cmd["custom_pattern"] = str(status.get("design_ab", "")).strip()
+
+            if "current_step" not in resume_cmd:
+                resume_cmd["current_step"] = int(status.get("current_step", 0))
+            if "completed_jobs" not in resume_cmd:
+                resume_cmd["completed_jobs"] = int(status.get("completed_jobs", 0))
+            if "current_tile_index" not in resume_cmd:
+                resume_cmd["current_tile_index"] = int(status.get("working_tile", status.get("completed_jobs", 0)))
+
+            # 하위 호환: /robot/command 토픽에도 resume 전파
+            msg = String(); msg.data = "resume"
+            self._publish_reliable(self._pub_cmd, msg, retries=2)
+
+            self._send_task_job_goal(resume_cmd, is_resume=True)
 
         elif action == "stop":
             self.get_logger().warn("[CMD] Firebase stop")

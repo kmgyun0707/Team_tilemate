@@ -15,7 +15,7 @@ class WallTileInspectionEngine:
         # params
         # -----------------------------
         self.node.declare_parameter("gripper2cam_path", "")
-        self.node.declare_parameter("use_inverse", True)
+        self.node.declare_parameter("use_inverse", False)
 
         self.node.declare_parameter("min_mm", 200)
         self.node.declare_parameter("max_mm", 3000)
@@ -113,15 +113,6 @@ class WallTileInspectionEngine:
             raise RuntimeError("depth_image is None")
         return self.localizer.depth_image.shape
 
-    def _to_m_list(self, p_mm):
-        if p_mm is None:
-            return None
-        return [
-            float(p_mm[0]) / 1000.0,
-            float(p_mm[1]) / 1000.0,
-            float(p_mm[2]) / 1000.0,
-        ]
-
     def normal_and_theta_to_rpy_deg(self, normal, theta_rad):
         nx, ny, nz = [float(v) for v in normal]
 
@@ -130,17 +121,11 @@ class WallTileInspectionEngine:
         yaw_deg = float(np.degrees(theta_rad))
 
         return roll_deg, pitch_deg, yaw_deg
+
     # --------------------------------------------------
     # ROI sampling
     # --------------------------------------------------
     def sample_points_in_rotated_roi(self, cx, cy, w, h, theta_rad, n_points=25, shrink_px=0):
-        """
-        YOLO가 준 rotated ROI 내부에서 샘플 점 n개 생성
-        - center: (cx, cy)
-        - size: (w, h)
-        - angle: theta_rad
-        - shrink_px: ROI를 안쪽으로 줄일 픽셀
-        """
         h_img, w_img = self._depth_hw()
 
         inner_w = max(2.0, float(w) - 2.0 * float(shrink_px))
@@ -225,7 +210,6 @@ class WallTileInspectionEngine:
         normal = normal / norm
         d = -float(np.dot(normal, centroid))
 
-        # normal 방향 통일
         if normal[2] < 0:
             normal = -normal
             d = -d
@@ -233,9 +217,24 @@ class WallTileInspectionEngine:
         return normal, d, centroid
 
     # --------------------------------------------------
+    # base center estimation
+    # --------------------------------------------------
+    def estimate_tile_center_base_point(self, cx, cy, robot_posx):
+        return self.localizer.estimate_pick_base_point_from_pixel(
+            u=int(round(cx)),
+            v=int(round(cy)),
+            robot_posx=robot_posx,
+            kernel_size=self.depth_kernel_size,
+            min_mm=self.min_mm,
+            max_mm=self.max_mm,
+            inlier_thresh_mm=self.depth_inlier_thresh_mm,
+            z_offset_mm=0.0,
+        )
+
+    # --------------------------------------------------
     # one tile analysis
     # --------------------------------------------------
-    def analyze_one_tile(self, tile, index=0):
+    def analyze_one_tile(self, tile, robot_posx, index=0):
         cx = float(tile.pose.x)
         cy = float(tile.pose.y)
         w = float(tile.width)
@@ -263,6 +262,12 @@ class WallTileInspectionEngine:
         normal, d, centroid = plane
         roll_deg, pitch_deg, yaw_deg = self.normal_and_theta_to_rpy_deg(normal, theta_rad)
 
+        base_center = self.estimate_tile_center_base_point(cx, cy, robot_posx)
+        if base_center is None:
+            self.node.get_logger().warn(
+                f"[InspectionEngine] failed to estimate base center for tile[{index}]"
+            )
+
         name = tile.pattern_name.strip() if tile.pattern_name.strip() else f"tile_{index + 1}"
 
         return {
@@ -274,13 +279,24 @@ class WallTileInspectionEngine:
             "plane_normal": [float(normal[0]), float(normal[1]), float(normal[2])],
             "plane_d": float(d),
             "plane_centroid_mm": [float(centroid[0]), float(centroid[1]), float(centroid[2])],
+            "base_center_mm": (
+                [float(base_center[0]), float(base_center[1]), float(base_center[2])]
+                if base_center is not None else None
+            ),
         }
 
     # --------------------------------------------------
     # all tiles
     # --------------------------------------------------
-    def analyze_once(self, wait_timeout_sec=None):
+    def analyze_once(self, robot_posx, wait_timeout_sec=None):
         wait_timeout_sec = self.wait_timeout_sec if wait_timeout_sec is None else float(wait_timeout_sec)
+
+        if robot_posx is None or len(robot_posx) < 6:
+            return {
+                "success": False,
+                "message": "invalid_robot_posx",
+                "result_dict": None,
+            }
 
         if not self.wait_until_ready(timeout_sec=wait_timeout_sec):
             return {
@@ -299,7 +315,7 @@ class WallTileInspectionEngine:
         results = []
         for i, tile in enumerate(self.latest_tile_array.tiles):
             try:
-                item = self.analyze_one_tile(tile, i)
+                item = self.analyze_one_tile(tile, robot_posx, i)
                 if item is not None:
                     results.append(item)
             except Exception as e:
@@ -315,7 +331,6 @@ class WallTileInspectionEngine:
         payload = {
             "success": True,
             "message": "inspect_complete",
-            "frame_id": "camera_color_optical_frame",
             "timestamp_sec": float(time.time()),
             "tiles": results,
         }

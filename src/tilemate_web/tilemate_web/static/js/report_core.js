@@ -494,35 +494,61 @@
   el('insp-btn-wire')?.addEventListener('click', TileInspect3D.toggleWire);
   el('insp-btn-rotate')?.addEventListener('click', TileInspect3D.toggleRotate);
 
-  try {
-    const es = new EventSource('/api/inspect/events');
-
-    es.addEventListener('inspect_updated', async () => {
+  // SSE: 전역 연결(_globalEs)이 있으면 재사용, 없으면 새로 생성
+  function _attachSSE(source) {
+    source.addEventListener('inspect_updated', async () => {
       try {
         await fetchLatestOnly(false);
-
         if (state.data && TileInspect3D.isOpen() && TileInspect3D.isInitialized()) {
           TileInspect3D.render(state.data, helpers);
         }
       } catch (err) {
         console.error(err);
-        el('statusLine').textContent = `error: ${err.message}`;
+        if (el('statusLine')) el('statusLine').textContent = `error: ${err.message}`;
       }
     });
-
-    es.onerror = (err) => {
-      console.error('SSE error:', err);
-    };
-  } catch (err) {
-    console.warn('SSE not available', err);
   }
 
-  (async () => {
+  if (window._globalEs) {
+    _attachSSE(window._globalEs);
+  } else {
     try {
-      await fetchLatestOnly(true);
+      const es = new EventSource('/api/inspect/events');
+      es.onerror = (err) => console.error('SSE error:', err);
+      _attachSSE(es);
     } catch (err) {
-      console.error(err);
-      el('statusLine').textContent = `error: ${err.message}`;
+      console.warn('SSE not available', err);
     }
-  })();
+  }
+
+  // 초기 데이터 로드 (보고서 모달이 열릴 때까지 미루기)
+  // openModal() 호출 시 자동 fetch됨
+
+  // ── 공개 API ──
+  window.ReportCore = {
+    /** 보고서 모달 열기 + 데이터 fetch/render */
+    openModal: async () => {
+      document.getElementById('report-modal').classList.add('show');
+      try {
+        await fetchFromInput(false);
+      } catch (err) {
+        if (el('statusLine')) el('statusLine').textContent = `error: ${err.message}`;
+      }
+    },
+    /** 이미 데이터가 있으면 re-render만, 없으면 fetch */
+    openModalWithData: async (data) => {
+      document.getElementById('report-modal').classList.add('show');
+      if (data) {
+        render(data);
+      } else {
+        try { await fetchFromInput(false); } catch(err) {}
+      }
+    },
+    closeModal: () => {
+      document.getElementById('report-modal').classList.remove('show');
+    },
+    isOpen: () => document.getElementById('report-modal').classList.contains('show'),
+    refresh: (force = true) => fetchFromInput(force),
+    getState: () => state,
+  };
 })();

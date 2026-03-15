@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <title>TILING MONITOR - 두산 M0609</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/report_modal.css">
+    <link rel="stylesheet" href="/static/css/report_3d.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
@@ -342,10 +344,10 @@
 
                     <!-- 툴바 -->
                     <div id="insp-toolbar" style="position:absolute; right:14px; bottom:14px; z-index:20; display:flex; gap:8px; flex-wrap:wrap; background:rgba(0,0,0,0.45); border:1px solid rgba(255,255,255,0.1); border-radius:14px; padding:8px 10px; backdrop-filter:blur(10px);">
-                        <button id="insp-btn-points"  onclick="inspTogglePoints()"  style="border:1px solid rgba(96,165,250,0.4); background:rgba(96,165,250,0.15); color:#bfdbfe; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Points</button>
-                        <button id="insp-btn-normals" onclick="inspToggleNormals()" style="border:1px solid rgba(96,165,250,0.4); background:rgba(96,165,250,0.15); color:#bfdbfe; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Normals</button>
-                        <button id="insp-btn-wire"    onclick="inspToggleWire()"    style="border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Wireframe</button>
-                        <button id="insp-btn-rotate"  onclick="inspToggleRotate()"  style="border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Auto Rotate</button>
+                        <button id="insp-btn-points"  onclick="TileInspect3D.togglePoints()"  style="border:1px solid rgba(96,165,250,0.4); background:rgba(96,165,250,0.15); color:#bfdbfe; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Points</button>
+                        <button id="insp-btn-normals" onclick="TileInspect3D.toggleNormals()" style="border:1px solid rgba(96,165,250,0.4); background:rgba(96,165,250,0.15); color:#bfdbfe; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Normals</button>
+                        <button id="insp-btn-wire"    onclick="TileInspect3D.toggleWire()"    style="border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Wireframe</button>
+                        <button id="insp-btn-rotate"  onclick="TileInspect3D.toggleRotate()"  style="border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#94a3b8; border-radius:9px; padding:7px 13px; font-size:0.78em; font-weight:700; cursor:pointer; flex:unset; transition:0.15s;">Auto Rotate</button>
                     </div>
 
                     <!-- 힌트 -->
@@ -569,87 +571,118 @@
 
 </div><!-- /.container -->
 
-<!-- ══ 단차 보고서 모달 ══════════════════════════════════════ -->
+<!-- ══ 단차 보고서 모달 (풀버전 report_page UI) ══════════════ -->
 <div id="report-modal">
-    <div id="report-modal-inner">
-        <div id="report-modal-header">
-            <div style="display:flex; align-items:center; gap:12px;">
-                <span style="background:linear-gradient(135deg,#1d4ed8,#0ea5e9);color:#fff;font-size:0.72em;font-weight:800;padding:3px 10px;border-radius:20px;letter-spacing:1.5px;">REPORT</span>
-                <div style="color:#f3f4f6;font-size:1.1em;font-weight:700;">타일 단차 보고서</div>
-            </div>
-            <button onclick="closeReportModal()" style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#fca5a5;border-radius:10px;padding:7px 16px;font-size:0.88em;font-weight:700;cursor:pointer;flex:unset;">✕ 닫기</button>
-        </div>
-        <div id="report-modal-body">
-            <div class="rp-wrap">
-                <div class="rp-titlebar">
-                    <div class="rp-title">
-                        <h1>타일 단차 보고서</h1>
-                        <p>inspection payload의 타일 중심점과 wall plane 정보를 이용해 벽 기준 단차, 기울기, 타일 상태를 요약합니다.</p>
-                    </div>
-                    <div class="rp-titleActions">
-                        <button id="rp-open3dBtn" class="rp-secondary" style="padding:10px 16px;border-radius:10px;border:1px solid #2d3b63;background:#223050;color:#e9eefc;font-size:13px;font-weight:700;cursor:pointer;">3D 상세 보기</button>
-                    </div>
-                </div>
-
-                <div class="rp-panel rp-controls">
-                    <input id="rp-urlInput" type="text" value="/api/inspect/latest" />
-                    <input id="rp-warnMm" type="number" step="0.1" value="3.0" title="주의 기준 mm" style="width:80px;" />
-                    <input id="rp-badMm"  type="number" step="0.1" value="6.0" title="불량 기준 mm" style="width:80px;" />
-                    <button id="rp-fetchBtn">새로고침</button>
-                    <button id="rp-loadDummyBtn" class="rp-secondary">더미 적재</button>
-                    <button id="rp-force3dBtn"   class="rp-secondary">현재 데이터로 3D</button>
-                </div>
-
-                <div class="rp-panel rp-summary">
-                    <div class="rp-metric"><div class="k">타일 수</div><div class="v" id="rp-mTiles">0</div></div>
-                    <div class="rp-metric"><div class="k">기준면</div><div class="v" id="rp-mBase" style="font-size:16px;">-</div></div>
-                    <div class="rp-metric"><div class="k">최대 |벽 기준 거리| (mm)</div><div class="v" id="rp-mMaxDz">-</div></div>
-                    <div class="rp-metric"><div class="k">평균 기울기 (°)</div><div class="v" id="rp-mAvgTilt">-</div></div>
-                    <div class="rp-metric"><div class="k">불량 개수</div><div class="v" id="rp-mBad">0</div></div>
-                    <div class="rp-metric"><div class="k">갱신 시각</div><div class="v" id="rp-mTime" style="font-size:16px;">-</div></div>
-                </div>
-
-                <div class="rp-grid">
-                    <div>
-                        <div class="rp-panel rp-section">
-                            <h2>배치도 + 벽 기준 단차 색상</h2>
-                            <div class="rp-subdesc">원 크기는 |벽 기준 거리|, 색상은 정상/주의/불량을 나타냅니다.</div>
-                            <div class="rp-canvasWrap">
-                                <canvas id="rpMapCanvas" width="960" height="460"></canvas>
-                            </div>
-                            <div class="rp-legend">
-                                <span class="rp-chip"><span class="rp-dot" style="background:#22c55e"></span> 정상</span>
-                                <span class="rp-chip"><span class="rp-dot" style="background:#f59e0b"></span> 주의</span>
-                                <span class="rp-chip"><span class="rp-dot" style="background:#ef4444"></span> 불량</span>
-                                <span class="rp-chip">원 크기 = |벽 기준 거리|</span>
-                                <span class="rp-chip">텍스트 = 이름 / 단차 / Tilt</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="rp-panel rp-section">
-                            <h2>타일별 검사 결과</h2>
-                            <div class="rp-subdesc">단차가 큰 순서대로 정렬합니다.</div>
-                            <div class="rp-tableWrap">
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>타일</th><th>Conf</th><th>Center UV</th>
-                                            <th>Z</th><th>Wall Dist</th><th>Tilt</th><th>RPY</th><th>Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="rp-tileTableBody">
-                                        <tr><td colspan="8"><div class="rp-emptyHint">타일 데이터가 없습니다.</div></td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div class="rp-statusline" id="rp-statusLine">ready</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+  <div id="report-modal-inner">
+    <!-- 모달 헤더: 닫기 버튼 -->
+    <div id="report-modal-header">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span style="background:linear-gradient(135deg,#1d4ed8,#0ea5e9);color:#fff;font-size:0.72em;font-weight:800;padding:3px 10px;border-radius:20px;letter-spacing:1.5px;">REPORT</span>
+        <div style="color:#f3f4f6;font-size:1.1em;font-weight:700;">타일 시공 검사 보고서</div>
+      </div>
+      <button onclick="closeReportModal()" style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#fca5a5;border-radius:10px;padding:7px 16px;font-size:0.88em;font-weight:700;cursor:pointer;flex:unset;">✕ 닫기</button>
     </div>
+
+    <!-- 보고서 본문: report_page.html의 .wrap 내용 그대로 -->
+    <div id="report-modal-body">
+      <div class="wrap">
+
+        <div class="titlebar">
+          <div class="title">
+            <h1>타일 시공 검사 보고서</h1>
+            <p>inspection payload의 타일 중심점과 wall plane 정보를 이용해 벽 기준 단차, 기울기, 타일 상태를 요약하고 3D에서 상세 확인합니다.</p>
+          </div>
+        </div>
+
+        <div class="panel controls">
+          <div class="ctrl">
+            <label for="urlInput">API URL</label>
+            <input id="urlInput" type="text" value="/api/inspect/latest" />
+          </div>
+          <div class="ctrl">
+            <label for="warnMm">주의 기준 (mm)</label>
+            <input id="warnMm" type="number" step="0.1" value="3.0" />
+          </div>
+          <div class="ctrl">
+            <label for="badMm">불량 기준 (mm)</label>
+            <input id="badMm" type="number" step="0.1" value="6.0" />
+          </div>
+          <div class="ctrl">
+            <label for="anomThresh">Anomaly 기준</label>
+            <input id="anomThresh" type="number" step="0.01" value="0.5" />
+          </div>
+          <div class="ctrlButtons">
+            <button id="fetchBtn">새로고침</button>
+            <button id="force3dBtn" class="secondary">3D 뷰어</button>
+          </div>
+        </div>
+
+        <div class="panel summary" id="summaryRow">
+          <div class="metric"><div class="k">타일 수</div><div class="v" id="mTiles">-</div></div>
+          <div class="metric"><div class="k">기준면</div><div class="v" id="mBase" style="font-size:16px;">-</div></div>
+          <div class="metric"><div class="k">최대 |벽 기준 거리| (mm)</div><div class="v" id="mMaxDz">-</div></div>
+          <div class="metric"><div class="k">평균 기울기 (°)</div><div class="v" id="mAvgTilt">-</div></div>
+          <div class="metric"><div class="k">불량 개수</div><div class="v" id="mBad">-</div></div>
+          <div class="metric"><div class="k">갱신 시각</div><div class="v" id="mTime" style="font-size:16px;">-</div></div>
+        </div>
+
+        <div class="grid">
+          <div class="left">
+            <div class="panel section">
+              <h2>배치도 + 벽 기준 단차 색상</h2>
+              <div class="subdesc">원 크기는 |벽 기준 거리|, 색상은 정상/주의/불량을 나타냅니다.</div>
+              <div class="canvasWrap">
+                <canvas id="mapCanvas" width="800" height="460"></canvas>
+              </div>
+              <div class="legend">
+                <span class="chip"><span class="dot" style="background:#22c55e"></span> 정상</span>
+                <span class="chip"><span class="dot" style="background:#f59e0b"></span> 주의</span>
+                <span class="chip"><span class="dot" style="background:#ef4444"></span> 불량</span>
+                <span class="chip">원 크기 = |벽 기준 거리|</span>
+                <span class="chip">텍스트 = 이름 / 단차 / Tilt</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="right">
+            <div class="panel section">
+              <h2>타일별 검사 결과</h2>
+              <div class="subdesc">단차, 무늬 이상치, 기울기 기준으로 정렬해서 확인할 수 있습니다.</div>
+              <div class="tableToolbar">
+                <div class="tableToolbarTitle">정렬</div>
+                <select id="sortMode">
+                  <option value="dz">단차 큰 순</option>
+                  <option value="anomaly">무늬 이상치 순</option>
+                  <option value="tilt">기울기 큰 순</option>
+                  <option value="name">타일 이름순</option>
+                </select>
+              </div>
+              <div class="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>타일</th>
+                      <th>Conf</th>
+                      <th>단차</th>
+                      <th>기울기</th>
+                      <th>RPY</th>
+                      <th>무늬 이상치</th>
+                      <th>상태</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tileTableBody">
+                    <tr><td colspan="7"><div class="emptyHint">아직 inspection 데이터가 없습니다.</div></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="statusline" id="statusLine">ready</div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /.wrap -->
+    </div><!-- /#report-modal-body -->
+  </div><!-- /#report-modal-inner -->
 </div>
 
 <!-- ══ Role Switcher ═════════════════════════════════════════ -->
@@ -665,6 +698,8 @@
 <!-- ══ Firebase & 메인 스크립트 ══════════════════════════════ -->
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+<script src="/static/js/report_3d.js"></script>
+<script src="/static/js/report_core.js"></script>
 <script src="/static/js/main.js"></script>
 
 </body>

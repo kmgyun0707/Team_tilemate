@@ -1,0 +1,3 @@
+int32 tile_id
+string pattern_name
+float32 anomaly_score

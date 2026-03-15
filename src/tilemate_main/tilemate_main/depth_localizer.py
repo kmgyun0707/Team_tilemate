@@ -6,7 +6,7 @@ from sensor_msgs.msg import Image, CameraInfo
 
 
 class DepthLocalizer:
-    def __init__(self, node, gripper2cam_path, use_inverse=True):
+    def __init__(self, node, gripper2cam_path, use_inverse=False):
         """
         Args:
             node: rclpy Node

@@ -252,10 +252,10 @@ class PlaceTileActionServer(Node):
 
         req = goal_handle.request
 
-        STX_Y = 20
-        STX_ROL = 10
-        STX_PIT = 10
-        STX_YAW = 10
+        STX_Y = 50
+        STX_ROL = 50
+        STX_PIT = 50
+        STX_YAW = 50
 
         Force = float(req.max_press_force)
 
@@ -327,7 +327,7 @@ class PlaceTileActionServer(Node):
 
             if not touched or contact_joint is None:
                 self.get_logger().warn("[CONTACT] failed (timeout/no joint)")
-                return (False, 0.0, "contact_failed")
+                return (True, 0.0, "contact_failed")
 
             # amovej(contact_joint, vel=40, acc=40)
 
@@ -384,22 +384,6 @@ class PlaceTileActionServer(Node):
             movel(posx(target), ref=DR_BASE, vel=30, acc=30)
             mwait()
 
-        def move_absoulte(x: float, y: float, z: float, w: float = 0.0, p: float = 0.0, r: float = 0.0):
-            from DSR_ROBOT2 import posx, movel, mwait, DR_BASE, get_current_posx
-
-            cur, _ = get_current_posx(DR_BASE)
-            target = [
-                x,
-                y,
-                z,
-                cur[3] + w,
-                cur[4] + p,
-                cur[5] + r,
-            ]
-            movel(posx(target), ref=DR_BASE, vel=30, acc=30)
-            mwait()
-            print(get_current_posx(DR_BASE))
-
         def move_to_tile_place_position(placement_index: int):
             from DSR_ROBOT2 import posx, movel, mwait, DR_BASE
 
@@ -435,7 +419,7 @@ class PlaceTileActionServer(Node):
             mwait()
             return dx, dz
 
-        j_ready = posj([0, 0, 90, 0, 90, 0])
+        j_ready = posj([0, 0, 90, 0, 90, 180])
 
 
         # 1) Home
@@ -485,7 +469,7 @@ class PlaceTileActionServer(Node):
             return (False, press_depth, "canceled")
 
         # 중간 홈 복귀
-        movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
+        movej(j_ready, vel=80, acc=80)
 
         if self.check_abort(goal_handle):
             return (False, press_depth, "canceled")
@@ -494,7 +478,7 @@ class PlaceTileActionServer(Node):
         tool_pre_release = posx([239.723, -354.567+10.0, 201.217, 122.919, -179.643, -57.826+180.0])
         tool_release = posx([239.723, -354.567+10.0, 120.736, 122.919, -179.643, -57.826+180.0])
 
-        movel(tool_pre_release, vel=30, acc=30)
+        movel(tool_pre_release, vel=80, acc=80)
         mwait()
         movel(tool_release, vel=30, acc=30)
         mwait()

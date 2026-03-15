@@ -331,6 +331,8 @@ database.ref('robot_status').on('value', (snapshot) => {
                     tileState[i] = 'checking';
                 }
                 openInspectionModal();
+                // 단차 보고서 모달도 함께 열기
+                if (window.ReportCore) ReportCore.openModal();
             }
 
         // 나머지: 보호 조건 차단
@@ -1300,26 +1302,43 @@ function setRole(role) {
 function openDepthViewerPage() { openPointCloudViewer(); }
 
 /* ════════════════════════════════════════════════════════════
-   단차 검수 3D 뷰어 모달 (inspection-modal)
+   단차 검수 3D 뷰어 모달 (inspection-modal) — TileInspect3D 사용
    ════════════════════════════════════════════════════════════ */
-let _inspScene, _inspCamera, _inspRenderer, _inspControls;
-let _inspMeshes = [], _inspPointClouds = [], _inspArrows = [];
-let _inspWorldGroup;
-let _inspAutoRotate  = false;
-let _inspWireframe   = false;
-let _inspShowPoints  = true;
-let _inspShowNormals = true;
-let _inspInitialized = false;
-let _inspAnimId      = null;
-let _lastInspTileStep       = -1;
-let _currentWorkingTileId   = 1;
-let _lastInspectionData     = null;
+let _lastInspTileStep     = -1;
+let _currentWorkingTileId = 1;
+let _lastInspectionData   = null;
 
-// 단차 판정 기준 (mm / degrees)
 const DZ_BAD   = 6.0;
 const DZ_WARN  = 3.0;
 const TILT_BAD = 5.0;
 const TILT_WARN = 2.0;
+
+const _inspHelpers = {
+    tiltDeg: (rpy) => {
+        if (!Array.isArray(rpy)) return 0;
+        return Math.max(...rpy.map(v => Math.abs(Number(v))).filter(Number.isFinite));
+    },
+    classify: (mm) => {
+        if (mm >= DZ_BAD)  return { cls: 'bad',  text: '불량', color: '#ef4444' };
+        if (mm >= DZ_WARN) return { cls: 'warn', text: '주의', color: '#f59e0b' };
+        return { cls: 'good', text: '정상', color: '#22c55e' };
+    },
+    signedDistanceToWallPlaneMm: (pointMm, wallRef) => {
+        if (!wallRef || !Array.isArray(pointMm) || pointMm.length < 3) return NaN;
+        const [nx, ny, nz] = wallRef.n;
+        const [px, py, pz] = wallRef.p;
+        const dx = Number(pointMm[0]) - px, dy = Number(pointMm[1]) - py, dz = Number(pointMm[2]) - pz;
+        const nNorm = Math.hypot(nx, ny, nz) || 1;
+        return (nx * dx + ny * dy + nz * dz) / nNorm;
+    },
+    getWallRef: () => {
+        if (!_lastInspectionData?.wall) return null;
+        const n   = _lastInspectionData.wall.normal || _lastInspectionData.wall.plane_normal || [0, 0, 1];
+        const cmm = _lastInspectionData.wall.plane_centroid_mm || null;
+        if (!Array.isArray(n) || !Array.isArray(cmm)) return null;
+        return { n: n.map(Number), p: cmm.map(Number) };
+    },
+};
 
 function _tilt(rpy_deg) {
     if (!Array.isArray(rpy_deg)) return 0;
@@ -1327,366 +1346,20 @@ function _tilt(rpy_deg) {
 }
 
 async function openInspectionModal() {
-    const modal = document.getElementById('inspection-modal');
-    modal.style.display = 'flex';
-    if (!_inspInitialized) {
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        await _initInsp3D();
-    }
+    await TileInspect3D.open();
     await _fetchAndApplyInspection();
-    if (_lastInspectionData) renderInspectionData(_lastInspectionData);
+    if (_lastInspectionData) TileInspect3D.render(_lastInspectionData, _inspHelpers);
 }
 
 function closeInspectionModal() {
-    const modal = document.getElementById('inspection-modal');
-    if (modal) modal.style.display = 'none';
+    TileInspect3D.close();
 }
 
 function closeInspectionModalWithResult() {
-    closeInspectionModal();
-    if (!_lastInspectionData) return;
-
-    const DZ_BAD_LOCAL   = 6.0;
-    const DZ_WARN_LOCAL  = 3.0;
-    const TILT_BAD_LOCAL = 5.0;
-    const TILT_WARN_LOCAL = 2.0;
-
-    (_lastInspectionData.tiles || []).forEach((tile, idx) => {
-        const tileId = idx + 1;
-        const tileEl = document.getElementById(`tile-${tileId}`);
-        if (!tileEl) return;
-
-        const p   = Array.isArray(tile.plane_centroid_mm) ? tile.plane_centroid_mm.map(Number) : [NaN,NaN,NaN];
-        let dz = NaN;
-        if (_lastInspectionData.wall) {
-            const n    = (_lastInspectionData.wall.normal || _lastInspectionData.wall.plane_normal || [0,0,1]).map(Number);
-            const wp   = (_lastInspectionData.wall.plane_centroid_mm || [0,0,0]).map(Number);
-            const nNorm = Math.hypot(...n) || 1;
-            dz = (n[0]*(p[0]-wp[0]) + n[1]*(p[1]-wp[1]) + n[2]*(p[2]-wp[2])) / nNorm;
-        }
-        const dzAbs   = Number.isFinite(dz) ? Math.abs(dz) : NaN;
-        const tilt    = _tilt(tile.rpy_deg);
-
-        const dzBad   = Number.isFinite(dzAbs) && dzAbs >= DZ_BAD_LOCAL;
-        const dzWarn  = Number.isFinite(dzAbs) && dzAbs >= DZ_WARN_LOCAL;
-        const tiltBad = tilt >= TILT_BAD_LOCAL;
-        const tiltWarn = tilt >= TILT_WARN_LOCAL;
-
-        tileEl.classList.remove('working','coated','running','finished','result-good','result-rmse-bad','result-rmse-warn','result-tilt-bad','result-both-bad');
-        tileEl.style.backgroundImage = ''; tileEl.style.backgroundColor = '';
-        tileEl.style.borderColor = '';     tileEl.style.color = '';
-
-        let cls, label;
-        if (dzBad && tiltBad) {
-            cls = 'result-both-bad';
-            label = `복합 불량\ndz:${Number.isFinite(dz)?dz.toFixed(1):'-'}mm ${tilt.toFixed(1)}°`;
-        } else if (dzBad) {
-            cls = 'result-rmse-bad';
-            label = `단차 불량\n${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
-        } else if (tiltBad) {
-            cls = 'result-tilt-bad';
-            label = `기울기 불량\n${tilt.toFixed(1)}°`;
-        } else if (dzWarn || tiltWarn) {
-            cls = 'result-rmse-warn';
-            const parts = [];
-            if (dzWarn)   parts.push(`dz:${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`);
-            if (tiltWarn) parts.push(`${tilt.toFixed(1)}°`);
-            label = `주의\n${parts.join(' ')}`;
-        } else {
-            cls = 'result-good';
-            label = `정상\n${Number.isFinite(dz)?dz.toFixed(1):'-'}mm`;
-        }
-
-        tileEl.classList.add(cls);
-        tileEl.innerText = label;
-        tileState[tileId] = cls;
-
-        const mesh3d = tiles3D[tileId - 1];
-        if (mesh3d) {
-            const DEG = Math.PI / 180;
-            const rpy = tile.rpy_deg || [0, 0, 0];
-            mesh3d.rotation.order = 'YXZ';
-            mesh3d.rotation.x = -Number(rpy[0]) * DEG;
-            mesh3d.rotation.y = -Number(rpy[1]) * DEG;
-            mesh3d.rotation.z = 0;
-            const dzScene = Number.isFinite(dz) ? dz * 0.0008 : 0;
-            mesh3d.position.z = dzScene;
-        }
-    });
+    TileInspect3D.close();
+    // COMPACT 진입 시 보고서 모달도 닫기
+    if (window.ReportCore) ReportCore.closeModal();
 }
-
-async function _initInsp3D() {
-    if (_inspInitialized) return;
-    _inspInitialized = true;
-
-    const container = document.getElementById('insp-three-container');
-    _inspScene = new THREE.Scene();
-    _inspScene.background = new THREE.Color(0x0b1120);
-
-    const grid = new THREE.GridHelper(1.2, 20, 0x1e3a5f, 0x0f1f35);
-    grid.position.y = -0.22;
-    _inspScene.add(grid);
-    _inspScene.add(new THREE.AxesHelper(0.08));
-
-    _inspScene.add(new THREE.AmbientLight(0xffffff, 0.9));
-    const d1 = new THREE.DirectionalLight(0xffffff, 1.0); d1.position.set(1, 1, 1); _inspScene.add(d1);
-    const d2 = new THREE.DirectionalLight(0xffffff, 0.45); d2.position.set(-1, 0.5, -0.5); _inspScene.add(d2);
-
-    _inspCamera = new THREE.PerspectiveCamera(55, container.clientWidth / container.clientHeight, 0.001, 50);
-    _inspCamera.position.set(0.35, 0.25, 0.7);
-
-    _inspRenderer = new THREE.WebGLRenderer({ antialias: true });
-    _inspRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    _inspRenderer.setSize(container.clientWidth, container.clientHeight);
-    container.appendChild(_inspRenderer.domElement);
-
-    _inspControls = new THREE.OrbitControls(_inspCamera, _inspRenderer.domElement);
-    _inspControls.enableDamping = true;
-    _inspControls.dampingFactor = 0.06;
-
-    _inspWorldGroup = new THREE.Group();
-    _inspWorldGroup.rotation.x = Math.PI;
-    _inspScene.add(_inspWorldGroup);
-
-    _animateInsp();
-
-    window.addEventListener('resize', () => {
-        if (!_inspRenderer) return;
-        _inspCamera.aspect = container.clientWidth / container.clientHeight;
-        _inspCamera.updateProjectionMatrix();
-        _inspRenderer.setSize(container.clientWidth, container.clientHeight);
-    });
-}
-
-function _animateInsp() {
-    _inspAnimId = requestAnimationFrame(_animateInsp);
-    if (_inspAutoRotate && _inspWorldGroup) _inspWorldGroup.rotation.y += 0.003;
-    if (_inspControls)  _inspControls.update();
-    if (_inspRenderer && _inspScene && _inspCamera) _inspRenderer.render(_inspScene, _inspCamera);
-}
-
-function _clearInspWorld() {
-    if (!_inspWorldGroup) return;
-    while (_inspWorldGroup.children.length > 0) {
-        const child = _inspWorldGroup.children[0];
-        _inspWorldGroup.remove(child);
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) {
-            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-            else child.material.dispose();
-        }
-    }
-    _inspMeshes = []; _inspPointClouds = []; _inspArrows = [];
-}
-
-function _inspMakeMesh(vertices, indices, color) {
-    const geometry = new THREE.BufferGeometry();
-    const flat = new Float32Array(vertices.flat());
-    geometry.setAttribute('position', new THREE.BufferAttribute(flat, 3));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
-    const mat = new THREE.MeshPhongMaterial({
-        color: new THREE.Color(color[0], color[1], color[2]),
-        side: THREE.DoubleSide, transparent: true, opacity: 0.58,
-        wireframe: _inspWireframe,
-    });
-    const mesh = new THREE.Mesh(geometry, mat);
-    _inspMeshes.push(mesh);
-    return mesh;
-}
-
-function _inspMakePoints(points, color) {
-    const geometry = new THREE.BufferGeometry();
-    const flat = new Float32Array(points.flat());
-    geometry.setAttribute('position', new THREE.BufferAttribute(flat, 3));
-    const mat = new THREE.PointsMaterial({ color: new THREE.Color(color[0], color[1], color[2]), size: 0.008, sizeAttenuation: true });
-    const pts = new THREE.Points(geometry, mat);
-    pts.visible = _inspShowPoints;
-    _inspPointClouds.push(pts);
-    return pts;
-}
-
-function _inspMakeArrow(centroid, normal, color, length = 0.06) {
-    const origin = new THREE.Vector3(...centroid);
-    const dir    = new THREE.Vector3(...normal).normalize();
-    const hex    = new THREE.Color(color[0], color[1], color[2]).getHex();
-    const arrow  = new THREE.ArrowHelper(dir, origin, length, hex, 0.016, 0.009);
-    arrow.visible = _inspShowNormals;
-    _inspArrows.push(arrow);
-    return arrow;
-}
-
-function _inspAddPlane(obj) {
-    if (!obj) return;
-    const group = new THREE.Group();
-
-    // patch_vertices 포맷 (구 버전)
-    if (obj.patch_vertices) {
-        const color = obj.color || [0.13, 0.77, 0.36];
-        group.add(_inspMakeMesh(obj.patch_vertices, obj.patch_indices, color));
-        if (obj.sample_points) group.add(_inspMakePoints(obj.sample_points, color));
-        if (obj.centroid && obj.normal) group.add(_inspMakeArrow(obj.centroid, obj.normal, color));
-        if (obj.center_point) {
-            const sg = new THREE.SphereGeometry(0.006, 16, 16);
-            const sm = new THREE.MeshStandardMaterial({ color: new THREE.Color(color[0], color[1], color[2]) });
-            const sphere = new THREE.Mesh(sg, sm);
-            sphere.position.set(...obj.center_point);
-            group.add(sphere);
-        }
-        _inspWorldGroup.add(group);
-        return;
-    }
-
-    // 새 포맷: plane_centroid_mm (mm → m 변환)
-    if (!obj.plane_centroid_mm && !obj.plane_normal) return;
-
-    const isWall = (obj.name === 'wall');
-    const color  = isWall ? [1.0, 0.75, 0.1] : [0.13, 0.77, 0.36];
-
-    let su, sv;
-    if (obj.plane_size_m?.width && obj.plane_size_m?.height) {
-        su = Number(obj.plane_size_m.width);
-        sv = Number(obj.plane_size_m.height);
-    } else if (Array.isArray(obj.size_uv)) {
-        su = Math.max(0.05, Number(obj.size_uv[0]) / 1000);
-        sv = Math.max(0.05, Number(obj.size_uv[1]) / 1000);
-    } else {
-        su = isWall ? 0.30 : 0.09;
-        sv = isWall ? 0.22 : 0.09;
-    }
-
-    let c;
-    if      (Array.isArray(obj.centroid_m))       c = obj.centroid_m.map(Number);
-    else if (Array.isArray(obj.center_point_m))   c = obj.center_point_m.map(Number);
-    else c = (obj.plane_centroid_mm || [0,0,0]).map(v => Number(v) / 1000);
-
-    const nArr  = obj.plane_normal || obj.normal || [0, 0, 1];
-    const nVec  = new THREE.Vector3(Number(nArr[0]||0), Number(nArr[1]||0), Number(nArr[2]||1)).normalize();
-    const qNormal = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), nVec);
-    let qFinal = qNormal;
-    if (obj.rpy_deg) {
-        const DEG = Math.PI / 180;
-        const e = new THREE.Euler(obj.rpy_deg[0]*DEG, obj.rpy_deg[1]*DEG, obj.rpy_deg[2]*DEG, 'XYZ');
-        qFinal = qNormal.multiply(new THREE.Quaternion().setFromEuler(e));
-    }
-
-    const geo = new THREE.PlaneGeometry(su, sv);
-    const mat = new THREE.MeshPhongMaterial({
-        color: new THREE.Color(color[0], color[1], color[2]),
-        side: THREE.DoubleSide, transparent: true,
-        opacity: isWall ? 0.28 : 0.65,
-        wireframe: _inspWireframe,
-    });
-    const plane = new THREE.Mesh(geo, mat);
-    plane.quaternion.copy(qFinal);
-    plane.position.set(...c);
-    _inspMeshes.push(plane);
-    group.add(plane);
-
-    const edge = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geo),
-        new THREE.LineBasicMaterial({ color: isWall ? 0xffd54f : 0x69f0ae, transparent: true, opacity: 0.5 })
-    );
-    edge.quaternion.copy(qFinal);
-    edge.position.set(...c);
-    group.add(edge);
-
-    group.add(_inspMakeArrow(c, nArr, color, Math.max(su, sv) * 0.5));
-
-    const sg = new THREE.SphereGeometry(isWall ? 0.006 : 0.004, 12, 12);
-    const sm = new THREE.MeshStandardMaterial({ color: new THREE.Color(color[0], color[1], color[2]) });
-    const sphere = new THREE.Mesh(sg, sm);
-    sphere.position.set(...c);
-    group.add(sphere);
-
-    _inspWorldGroup.add(group);
-}
-
-function _inspFitCamera() {
-    const box = new THREE.Box3().setFromObject(_inspWorldGroup);
-    if (box.isEmpty()) return;
-    const size   = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z, 0.08);
-    const dist   = maxDim * 2.6;
-    _inspCamera.position.set(center.x + dist, center.y + dist * 0.75, center.z + dist);
-    _inspCamera.lookAt(center);
-    _inspControls.target.copy(center);
-    _inspControls.update();
-}
-
-function _fmt(v, d = 3) {
-    if (v === null || v === undefined || Number.isNaN(v)) return '-';
-    return Number(v).toFixed(d);
-}
-
-function _buildInspSummaryHtml(data) {
-    const _v    = (val, d=2) => (val !== undefined && val !== null && !isNaN(val)) ? Number(val).toFixed(d) : '-';
-    const _arr  = (arr, d=3) => Array.isArray(arr) ? arr.map(v => Number(v).toFixed(d)).join(', ') : '-';
-    const _tc   = (maxTilt) => maxTilt >= 5.0 ? '#f87171' : maxTilt >= 2.0 ? '#fbbf24' : '#4ade80';
-    const _tl   = (maxTilt) => maxTilt >= 5.0 ? '불량' : maxTilt >= 2.0 ? '주의' : '정상';
-
-    let html = '';
-
-    if (data.wall) {
-        const w = data.wall;
-        const rpy = w.rpy_deg || [0, 0, 0];
-        const maxTilt = Math.max(Math.abs(rpy[0]||0), Math.abs(rpy[1]||0));
-        html += `
-            <div class="insp-section">
-                <h3>🧱 Wall</h3>
-                <div class="insp-kv">
-                    <div class="k">Normal</div><div class="v">[${_arr(w.plane_normal)}]</div>
-                    <div class="k">Centroid</div><div class="v">[${_arr(w.plane_centroid_mm, 1)}] mm</div>
-                    <div class="k">Roll</div><div class="v">${_v(rpy[0])}°</div>
-                    <div class="k">Pitch</div><div class="v">${_v(rpy[1])}°</div>
-                    <div class="k">Yaw</div><div class="v">${_v(rpy[2])}°</div>
-                </div>
-            </div>`;
-    }
-
-    html += '<div class="insp-section"><h3>🔲 Tiles</h3>';
-    for (const tile of (data.tiles || [])) {
-        const rpy = tile.rpy_deg || [0, 0, 0];
-        const maxTilt = Math.max(Math.abs(rpy[0]||0), Math.abs(rpy[1]||0), Math.abs(rpy[2]||0));
-        html += `
-            <div class="insp-tile-card">
-                <div class="insp-tile-name">${tile.name || 'tile'}</div>
-                <div class="insp-kv">
-                    <div class="k">판정</div><div class="v" style="color:${_tc(maxTilt)};font-weight:700;">${_tl(maxTilt)} (${maxTilt.toFixed(1)}°)</div>
-                    <div class="k">Roll</div><div class="v">${_v(rpy[0])}°</div>
-                    <div class="k">Pitch</div><div class="v">${_v(rpy[1])}°</div>
-                    <div class="k">Yaw</div><div class="v">${_v(rpy[2])}°</div>
-                    <div class="k">Normal</div><div class="v">[${_arr(tile.plane_normal)}]</div>
-                    <div class="k">Centroid</div><div class="v">[${_arr(tile.plane_centroid_mm, 1)}] mm</div>
-                    <div class="k">Conf</div><div class="v">${_v(tile.conf_score, 4)}</div>
-                </div>
-            </div>`;
-    }
-    html += '</div>';
-    return html;
-}
-
-function renderInspectionData(data) {
-    if (!_inspInitialized) return;
-    _clearInspWorld();
-    if (data.wall) _inspAddPlane(data.wall);
-    for (const tile of (data.tiles || [])) _inspAddPlane(tile);
-    _inspFitCamera();
-
-    document.getElementById('insp-badge-frame').textContent = `frame: ${data.frame_id ?? '-'}`;
-    document.getElementById('insp-badge-tiles').textContent = `tiles: ${data.tiles?.length ?? 0}`;
-    const ts = data.timestamp_sec ? new Date(data.timestamp_sec * 1000).toLocaleTimeString() : '-';
-    document.getElementById('insp-badge-time').textContent  = `time: ${ts}`;
-    document.getElementById('insp-summary-content').innerHTML = _buildInspSummaryHtml(data);
-    document.getElementById('insp-loading').style.display   = 'none';
-}
-
-/* 툴바 버튼 토글 */
-function inspTogglePoints()  { _inspShowPoints  = !_inspShowPoints;  _inspPointClouds.forEach(p => p.visible = _inspShowPoints);  document.getElementById('insp-btn-points').classList.toggle('insp-btn-active', _inspShowPoints); }
-function inspToggleNormals() { _inspShowNormals = !_inspShowNormals; _inspArrows.forEach(a => a.visible = _inspShowNormals);        document.getElementById('insp-btn-normals').classList.toggle('insp-btn-active', _inspShowNormals); }
-function inspToggleWire()    { _inspWireframe   = !_inspWireframe;   _inspMeshes.forEach(m => m.material.wireframe = _inspWireframe); document.getElementById('insp-btn-wire').classList.toggle('insp-btn-active', _inspWireframe); }
-function inspToggleRotate()  { _inspAutoRotate  = !_inspAutoRotate;  document.getElementById('insp-btn-rotate').classList.toggle('insp-btn-active', _inspAutoRotate); }
 
 /* API inspection_result 실시간 감시 */
 async function _fetchAndApplyInspection() {
@@ -1708,8 +1381,7 @@ async function _fetchAndApplyInspection() {
         }
 
         _lastInspectionData = data;
-        const modal = document.getElementById('inspection-modal');
-        if (modal.style.display === 'flex' && _inspInitialized) renderInspectionData(data);
+        if (TileInspect3D.isOpen() && TileInspect3D.isInitialized()) TileInspect3D.render(data, _inspHelpers);
     } catch (err) {
         console.warn('[INSPECT] fetch 실패:', err);
     }
@@ -1722,212 +1394,24 @@ if (window._globalEs) {
 }
 
 /* ════════════════════════════════════════════════════════════
-   단차 보고서 모달 로직
+   단차 보고서 모달 — ReportCore (report_core.js) 위임
    ════════════════════════════════════════════════════════════ */
-const rpState = { data: null, wallRef: null, lastSig: null };
-const rpEl    = (id) => document.getElementById(id);
-const rpFmt   = (v, d = 2) => Number.isFinite(Number(v)) ? Number(v).toFixed(d) : '-';
-
-function rpTiltDeg(rpy) {
-    return Math.max(Math.abs(Number(rpy?.[0] ?? 0)), Math.abs(Number(rpy?.[1] ?? 0)));
-}
-
-function rpClassify(mm) {
-    const warn = Number(rpEl('rp-warnMm').value || 3.0);
-    const bad  = Number(rpEl('rp-badMm').value  || 6.0);
-    if (mm >= bad)  return { cls: 'rp-bad',  text: '불량', color: '#ef4444' };
-    if (mm >= warn) return { cls: 'rp-warn', text: '주의', color: '#f59e0b' };
-    return { cls: 'rp-good', text: '정상', color: '#22c55e' };
-}
-
-function rpLoadWallRef(data) {
-    if (!data?.wall) return null;
-    const n   = data.wall.normal || data.wall.plane_normal || [0, 0, 1];
-    const cmm = data.wall.plane_centroid_mm || null;
-    if (!Array.isArray(n) || !Array.isArray(cmm)) return null;
-    return { n: n.map(Number), p: cmm.map(Number) };
-}
-
-function rpSignedDist(pointMm, wallRef) {
-    if (!wallRef || !Array.isArray(pointMm) || pointMm.length < 3) return NaN;
-    const [nx, ny, nz] = wallRef.n;
-    const [px, py, pz] = wallRef.p;
-    const dx = Number(pointMm[0]) - px, dy = Number(pointMm[1]) - py, dz = Number(pointMm[2]) - pz;
-    const nNorm = Math.hypot(nx, ny, nz) || 1;
-    return (nx * dx + ny * dy + nz * dz) / nNorm;
-}
-
-function rpNormalizeTiles(data) {
-    const tiles = Array.isArray(data?.tiles) ? data.tiles : [];
-    rpState.wallRef = rpLoadWallRef(data);
-    return tiles.map((tile, idx) => {
-        const p = Array.isArray(tile.plane_centroid_mm) ? tile.plane_centroid_mm.map(Number) : [NaN,NaN,NaN];
-        let distSafe = 0;
-        if (rpState.wallRef) {
-            const dist = rpSignedDist(p, rpState.wallRef);
-            distSafe = Number.isFinite(dist) ? dist : 0;
-        }
-        const rpy  = tile.rpy_deg || [0,0,0];
-        const tilt = Math.max(Math.abs(rpy[0]), Math.abs(rpy[1]));
-        const judge = rpClassify(Math.abs(distSafe));
-        return { ...tile, idx: idx + 1, z: p[2], dz: distSafe, dzAbs: Math.abs(distSafe), tilt, judge };
-    }).sort((a, b) => (b.dzAbs || 0) - (a.dzAbs || 0));
-}
-
-function rpUpdateSummary(tiles, data) {
-    rpEl('rp-mTiles').textContent   = String(tiles.length);
-    rpEl('rp-mBase').textContent    = rpState.wallRef ? 'inspection.wall' : '-';
-    rpEl('rp-mMaxDz').textContent   = tiles.length ? rpFmt(Math.max(...tiles.map(t => t.dzAbs || 0))) : '-';
-    rpEl('rp-mAvgTilt').textContent = tiles.length
-        ? rpFmt(tiles.reduce((s, t) => s + (t.tilt || 0), 0) / tiles.length)
-        : '-';
-    rpEl('rp-mBad').textContent  = String(tiles.filter(t => t.judge.cls === 'rp-bad').length);
-    rpEl('rp-mTime').textContent = data?.timestamp_sec
-        ? new Date(data.timestamp_sec * 1000).toLocaleTimeString() : '-';
-}
-
-function rpRenderTable(tiles) {
-    const tbody = rpEl('rp-tileTableBody');
-    tbody.innerHTML = '';
-    if (!tiles.length) {
-        tbody.innerHTML = '<tr><td colspan="8"><div class="rp-emptyHint">타일 데이터가 없습니다.</div></td></tr>';
-        return;
-    }
-    for (const t of tiles) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td><strong>${t.name ?? `tile_${t.idx}`}</strong></td>
-            <td>${rpFmt(t.conf_score, 4)}</td>
-            <td class="rp-mono">(${rpFmt(t.center_uv?.[0], 1)}, ${rpFmt(t.center_uv?.[1], 1)})</td>
-            <td class="rp-mono">${rpFmt(t.z, 2)}</td>
-            <td class="rp-mono" style="font-weight:800;color:${t.judge.color};">${t.dz >= 0 ? '+' : ''}${rpFmt(t.dz, 2)}</td>
-            <td class="rp-mono">${rpFmt(t.tilt, 2)}</td>
-            <td class="rp-mono">[${rpFmt(t.rpy_deg?.[0], 2)}, ${rpFmt(t.rpy_deg?.[1], 2)}, ${rpFmt(t.rpy_deg?.[2], 2)}]</td>
-            <td><span class="rp-badge ${t.judge.cls}">${t.judge.text}</span></td>
-        `;
-        tbody.appendChild(tr);
-    }
-}
-
-function rpDrawMap(tiles) {
-    const canvas = rpEl('rpMapCanvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#0e152a'; ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = 'rgba(148,163,184,0.12)'; ctx.lineWidth = 1;
-    for (let x = 40; x < w; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-    for (let y = 40; y < h; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-
-    if (!tiles.length) {
-        ctx.fillStyle = '#94a3b8'; ctx.font = '16px sans-serif';
-        ctx.fillText('inspection 데이터를 기다리는 중...', 40, 42);
-        return;
-    }
-
-    const valid = tiles.filter(t => Number.isFinite(Number(t.center_uv?.[0])) && Number.isFinite(Number(t.center_uv?.[1])));
-    if (!valid.length) return;
-
-    const us = valid.map(t => Number(t.center_uv[0]));
-    const vs = valid.map(t => Number(t.center_uv[1]));
-    const minU = Math.min(...us), maxU = Math.max(...us);
-    const minV = Math.min(...vs), maxV = Math.max(...vs);
-    const pad = 70;
-    const sx = u => pad + ((u - minU) / Math.max(1, maxU - minU)) * (w - 2 * pad);
-    const sy = v => pad + ((v - minV) / Math.max(1, maxV - minV)) * (h - 2 * pad);
-
-    for (const t of valid) {
-        const x = sx(Number(t.center_uv[0])), y = sy(Number(t.center_uv[1]));
-        const radius = 14 + Math.min(34, (t.dzAbs || 0) * 2.8);
-        ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = t.judge.color + '33'; ctx.fill();
-        ctx.lineWidth = 3; ctx.strokeStyle = t.judge.color; ctx.stroke();
-        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#f8fafc'; ctx.fill();
-        ctx.fillStyle = '#e5e7eb'; ctx.font = 'bold 15px sans-serif';
-        ctx.fillText(String(t.name ?? `tile_${t.idx}`), x + radius + 8, y - 12);
-        ctx.font = '13px sans-serif';
-        ctx.fillText(`벽 기준 ${t.dz >= 0 ? '+' : ''}${rpFmt(t.dz)} mm`, x + radius + 8, y + 6);
-        ctx.fillText(`Tilt ${rpFmt(t.tilt)}°`, x + radius + 8, y + 22);
-    }
-}
-
-function rpRender(data) {
-    rpState.data = data;
-    const tiles = rpNormalizeTiles(data);
-    rpUpdateSummary(tiles, data);
-    rpRenderTable(tiles);
-    rpDrawMap(tiles);
-    rpEl('rp-statusLine').textContent =
-        `loaded ${tiles.length} tiles @ ${data?.timestamp_sec ? new Date(data.timestamp_sec * 1000).toLocaleString() : '-'}`;
-}
-
-async function rpFetchLatest(force = false) {
-    const url = rpEl('rp-urlInput').value.trim();
-    const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data?.tiles)) throw new Error('tiles 필드가 없습니다.');
-    rpRender(data);
-}
 
 function openReportModal() {
-    document.getElementById('report-modal').classList.add('show');
-    if (rpState.data) {
-        rpRender(rpState.data);
+    if (window.ReportCore) {
+        ReportCore.openModal();
     } else {
-        rpFetchLatest(true).catch(err => { rpEl('rp-statusLine').textContent = `error: ${err.message}`; });
+        document.getElementById('report-modal').classList.add('show');
     }
 }
 
 function closeReportModal() {
-    document.getElementById('report-modal').classList.remove('show');
+    if (window.ReportCore) {
+        ReportCore.closeModal();
+    } else {
+        document.getElementById('report-modal').classList.remove('show');
+    }
 }
-
-// 보고서 모달 버튼 이벤트
-rpEl('rp-fetchBtn').addEventListener('click', () => {
-    rpFetchLatest(true).catch(err => rpEl('rp-statusLine').textContent = `error: ${err.message}`);
-});
-
-rpEl('rp-loadDummyBtn').addEventListener('click', async () => {
-    try {
-        rpEl('rp-statusLine').textContent = 'loading dummy...';
-        await fetch('/api/inspect/dummy', { method: 'POST', cache: 'no-store' });
-        await rpFetchLatest(true);
-    } catch (err) {
-        rpEl('rp-statusLine').textContent = `error: ${err.message}`;
-    }
-});
-
-rpEl('rp-warnMm').addEventListener('change', () => { if (rpState.data) rpRender(rpState.data); });
-rpEl('rp-badMm').addEventListener('change',  () => { if (rpState.data) rpRender(rpState.data); });
-
-rpEl('rp-open3dBtn').addEventListener('click', async () => {
-    if (!rpState.data) return;
-    closeReportModal();
-    const modal = document.getElementById('inspection-modal');
-    modal.style.display = 'flex';
-    if (!_inspInitialized) {
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        await _initInsp3D();
-    }
-    await _fetchAndApplyInspection();
-    if (_lastInspectionData) renderInspectionData(_lastInspectionData);
-});
-
-rpEl('rp-force3dBtn').addEventListener('click', async () => {
-    if (!rpState.data) return;
-    closeReportModal();
-    const modal = document.getElementById('inspection-modal');
-    modal.style.display = 'flex';
-    if (!_inspInitialized) {
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        await _initInsp3D();
-    }
-    await _fetchAndApplyInspection();
-    if (_lastInspectionData) renderInspectionData(_lastInspectionData);
-});
 
 // 보고서 모달 바깥 클릭 시 닫기
 document.getElementById('report-modal').addEventListener('click', (e) => {
@@ -1937,14 +1421,5 @@ document.getElementById('report-modal').addEventListener('click', (e) => {
 // 페이지 로드 시 보고서 버튼 표시
 document.getElementById('btn-report').style.display = 'block';
 
-// SSE로 inspection 업데이트 시 보고서도 자동 갱신
-if (window._globalEs) {
-    window._globalEs.addEventListener('inspect_updated', async () => {
-        try {
-            await rpFetchLatest(true);
-            if (document.getElementById('report-modal').classList.contains('show') && rpState.data) {
-                rpRender(rpState.data);
-            }
-        } catch (err) { console.error('report SSE error:', err); }
-    });
-}
+// SSE로 inspection 업데이트 시 보고서도 자동 갱신 (ReportCore 내부에서 처리)
+// (중복 방지: ReportCore가 window._globalEs를 재사용함)

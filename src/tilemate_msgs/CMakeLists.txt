@@ -27,10 +27,14 @@ set(action_files
   "action/PatternInspect.action"
 )
 
+set(msg_files
+  "msg/PatternScore.msg"
+  "msg/PatternScoreArray.msg"
+)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${action_files}
-  ${service_files}
+  ${msg_files}
   DEPENDENCIES
     builtin_interfaces
     std_msgs

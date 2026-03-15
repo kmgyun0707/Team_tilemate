@@ -46,9 +46,9 @@ class YoloTwoStageNode(Node):
         try:
             self.obb_model = YOLO(obb_model_path)
             self.cls_model = YOLO(cls_model_path)
-            self.get_logger().info("✅ OBB(탐지) & CLS(분류) 모델 듀얼 로드 성공!")
+            self.get_logger().info(" OBB(탐지) & CLS(분류) 모델 로드 성공!")
         except Exception as e:
-            self.get_logger().error(f"🚨 모델 로드 실패: {e}")
+            self.get_logger().error(f" 모델 로드 실패: {e}")
             raise e
 
         # 통신 품질(QoS) 설정
@@ -66,7 +66,7 @@ class YoloTwoStageNode(Node):
         self.tile_array_pub = self.create_publisher(TileArray, '/yolo/tile_array', 10)
         self.annotated_pub = self.create_publisher(Image, '/yolo/annotated_image', 10)
 
-        self.get_logger().info("🚀 2-Stage YOLO 파이프라인 가동! (배열 퍼블리시 모드)")
+        self.get_logger().info("\033[94m [1/3] [YOLO_OBB] initialize Done!\033[0m")
 
     def image_callback(self, msg):
         try:

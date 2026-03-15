@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
 import math
-import time
 import threading
 
 import cv2
@@ -17,8 +16,9 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
 
-from custom_tile_msgs.msg import TileArray, InspectionResult, InspectionResultArray
+from custom_tile_msgs.msg import TileArray
 from tilemate_msgs.action import PatternInspect
+from tilemate_msgs.msg import PatternScore
 
 
 class PatternInspectActionServer(Node):
@@ -49,23 +49,21 @@ class PatternInspectActionServer(Node):
         for pattern_name, img_path in self.ref_image_paths.items():
             if not os.path.exists(img_path):
                 self.get_logger().warn(
-                    f"🚨 기준 이미지 없음: {img_path} ({pattern_name} 검사 불가)"
+                    f"기준 이미지 없음: {img_path} ({pattern_name} 검사 불가)"
                 )
                 continue
 
             ref_img = cv2.imread(img_path)
             if ref_img is None:
                 self.get_logger().warn(
-                    f"🚨 기준 이미지 로드 실패: {img_path} ({pattern_name} 검사 불가)"
+                    f"기준 이미지 로드 실패: {img_path} ({pattern_name} 검사 불가)"
                 )
                 continue
 
             ref_edges = self.get_canny_edges(ref_img)
             self.safe_zones[pattern_name] = cv2.dilate(ref_edges, kernel, iterations=1)
 
-        self.get_logger().info(
-            f"✅ {len(self.safe_zones)}개 패턴의 안전지대 로드 완료"
-        )
+        
 
         # --------------------------------------------------
         # runtime state
@@ -81,11 +79,11 @@ class PatternInspectActionServer(Node):
         self.tracked_tiles = []
         self._last_header = None
         self._done_event = threading.Event()
+
         self._result_summary = {
             "success": False,
             "message": "idle",
-            "total_tiles": 0,
-            "defective_tiles": 0,
+            "pattern_scores": [],
         }
 
         # --------------------------------------------------
@@ -97,12 +95,6 @@ class PatternInspectActionServer(Node):
             self.inference_callback,
             10,
             callback_group=self.cb_group,
-        )
-
-        self.web_pub = self.create_publisher(
-            InspectionResultArray,
-            "/web/inspection_results",
-            10,
         )
 
         self.debug_pub = self.create_publisher(
@@ -121,7 +113,7 @@ class PatternInspectActionServer(Node):
             callback_group=self.cb_group,
         )
 
-        self.get_logger().info("✅ PatternInspectActionServer ready")
+        self.get_logger().info("\033[94m [3/3] [PATTERN_INSPECT] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # action callbacks
@@ -131,10 +123,6 @@ class PatternInspectActionServer(Node):
             if self._inspect_running:
                 self.get_logger().warn("[PATTERN] reject: already running")
                 return GoalResponse.REJECT
-
-        if goal_request.target_frames < 1:
-            self.get_logger().warn("[PATTERN] reject: target_frames < 1")
-            return GoalResponse.REJECT
 
         self.get_logger().info(
             f"[PATTERN] goal accepted: "
@@ -178,8 +166,7 @@ class PatternInspectActionServer(Node):
             self._result_summary = {
                 "success": False,
                 "message": "running",
-                "total_tiles": 0,
-                "defective_tiles": 0,
+                "pattern_scores": [],
             }
 
         self.publish_feedback(
@@ -200,8 +187,6 @@ class PatternInspectActionServer(Node):
                     goal_handle.canceled()
                     result.success = False
                     result.message = "canceled"
-                    result.total_tiles = 0
-                    result.defective_tiles = 0
                     return result
 
                 if self._done_event.wait(timeout=0.1):
@@ -213,15 +198,33 @@ class PatternInspectActionServer(Node):
                 self._active_goal_handle = None
                 self.reset_buffer_locked()
 
-            if not summary["success"]:
-                goal_handle.abort()
-            else:
-                goal_handle.succeed()
+            self.get_logger().info(
+                f"[PATTERN] result build start: success={summary['success']}, "
+                f"count={len(summary.get('pattern_scores', []))}"
+            )
 
             result.success = bool(summary["success"])
             result.message = str(summary["message"])
-            result.total_tiles = int(summary["total_tiles"])
-            result.defective_tiles = int(summary["defective_tiles"])
+
+            for i, ps in enumerate(summary.get("pattern_scores", []), start=1):
+                self.get_logger().info(
+                    f"[PATTERN] pack score {i}: "
+                    f"name={ps['pattern_name']}, score={ps['anomaly_score']}"
+                )
+                score_msg = PatternScore()
+                score_msg.tile_id = int(ps["tile_id"])
+                score_msg.pattern_name = str(ps["pattern_name"])
+                score_msg.anomaly_score = float(ps["anomaly_score"])
+                result.pattern_scores.append(score_msg)
+
+            if not summary["success"]:
+                self.get_logger().warn("[PATTERN] goal abort")
+                goal_handle.abort()
+            else:
+                self.get_logger().info("[PATTERN] goal succeed")
+                goal_handle.succeed()
+
+            self.get_logger().info("[PATTERN] returning action result")
             return result
 
         except Exception as e:
@@ -232,11 +235,13 @@ class PatternInspectActionServer(Node):
                 self._active_goal_handle = None
                 self.reset_buffer_locked()
 
-            goal_handle.abort()
+            try:
+                goal_handle.abort()
+            except Exception:
+                pass
+
             result.success = False
             result.message = f"exception: {e}"
-            result.total_tiles = 0
-            result.defective_tiles = 0
             return result
 
     # --------------------------------------------------
@@ -272,7 +277,7 @@ class PatternInspectActionServer(Node):
 
                 if current_pattern not in self.safe_zones:
                     self.get_logger().warn(
-                        f"⚠️ 등록되지 않은 패턴({current_pattern}) 감지! 검사 생략."
+                        f"등록되지 않은 패턴({current_pattern}) 감지! 검사 생략."
                     )
                     continue
 
@@ -310,10 +315,8 @@ class PatternInspectActionServer(Node):
                 if not matched:
                     self.tracked_tiles.append(
                         {
-                            "pose": tile.pose,
+                            "pose": tile.pose,  # tracking 내부용
                             "pattern_name": current_pattern,
-                            "width": tile.width,
-                            "height": tile.height,
                             "crack_history": [defect_pixel_count],
                             "vote_history": [is_defect],
                         }
@@ -338,7 +341,7 @@ class PatternInspectActionServer(Node):
                 )
 
             self.get_logger().info(
-                f"⏳ 패턴 검사 데이터 누적 중... "
+                f"패턴 검사 데이터 누적 중... "
                 f"({self.current_frame_count}/{self.target_frames} 프레임)"
             )
 
@@ -353,13 +356,12 @@ class PatternInspectActionServer(Node):
                     self.debug_pub.publish(debug_msg)
 
             if self.current_frame_count >= self.target_frames:
-                total_tiles, defective_tiles = self.publish_final_results(msg.header)
+                pattern_scores = self.publish_final_results()
 
                 self._result_summary = {
                     "success": True,
                     "message": "pattern_inspection_complete",
-                    "total_tiles": total_tiles,
-                    "defective_tiles": defective_tiles,
+                    "pattern_scores": pattern_scores,
                 }
 
                 if goal_handle is not None:
@@ -373,68 +375,54 @@ class PatternInspectActionServer(Node):
                 self._done_event.set()
 
         except Exception as e:
-            self.get_logger().error(f"🚨 패턴 검사 추론 중 에러: {e}")
+            self.get_logger().error(f"패턴 검사 추론 중 에러: {e}")
             self._result_summary = {
                 "success": False,
                 "message": f"exception: {e}",
-                "total_tiles": 0,
-                "defective_tiles": 0,
+                "pattern_scores": [],
             }
             self._done_event.set()
 
     # --------------------------------------------------
-    # result publish
+    # result build
     # --------------------------------------------------
-    def publish_final_results(self, header):
-        result_array_msg = InspectionResultArray()
-        result_array_msg.header = header
+    def publish_final_results(self):
+        pattern_scores = []
 
         self.get_logger().info("=========================================")
         self.get_logger().info(
-            f"🎯 {self.target_frames}프레임 다수결 패턴 검사 완료! (결과 웹 전송)"
+            f"{self.target_frames}프레임 다수결 패턴 검사 완료"
         )
-
-        defective_count = 0
 
         for idx, tt in enumerate(self.tracked_tiles):
             if len(tt["vote_history"]) < (self.target_frames / 2):
                 continue
 
             total_votes = len(tt["vote_history"])
-            defect_votes = sum(tt["vote_history"])
             avg_cracks = sum(tt["crack_history"]) / total_votes
 
-            final_is_defect = bool(defect_votes >= (total_votes / 2.0))
+            anomaly_score = min(
+                1.0,
+                avg_cracks / float(max(1, self.pixel_threshold))
+            )
 
-            res_msg = InspectionResult()
-            res_msg.tile_id = idx + 1
-            res_msg.pattern_name = tt["pattern_name"]
-            res_msg.pose = tt["pose"]
-            res_msg.width = tt["width"]
-            res_msg.height = tt["height"]
-            res_msg.is_defective = final_is_defect
-            res_msg.defect_type = "Crack" if final_is_defect else "None"
+            pattern_scores.append(
+                {
+                    "tile_id": idx + 1,
+                    "pattern_name": tt["pattern_name"],
+                    "anomaly_score": float(anomaly_score),
+                }
+            )
 
-            result_array_msg.results.append(res_msg)
-
-            if final_is_defect:
-                defective_count += 1
-
-            status = "🚨 최종 폐기" if final_is_defect else "✅ 최종 정상"
             self.get_logger().info(
-                f"[{tt['pattern_name']}] 타일 {idx + 1}: {status} | "
-                f"불량 판정: {defect_votes}/{total_votes}회 "
-                f"(평균 크랙: {avg_cracks:.1f}px)"
+                f"[{tt['pattern_name']}] 타일 {idx + 1} | "
+                f"avg_cracks={avg_cracks:.1f}px | "
+                f"anomaly_score={anomaly_score:.2f}"
             )
 
         self.get_logger().info("=========================================")
 
-        result_array_msg.total_tiles = len(result_array_msg.results)
-
-        if result_array_msg.total_tiles > 0:
-            self.web_pub.publish(result_array_msg)
-
-        return result_array_msg.total_tiles, defective_count
+        return pattern_scores
 
     # --------------------------------------------------
     # utils
@@ -451,7 +439,6 @@ class PatternInspectActionServer(Node):
         self.tracked_tiles = []
         self._last_header = None
 
-    # 외부에서 락 없이 부를 경우 대비용
     def reset_buffer(self):
         with self._lock:
             self.reset_buffer_locked()

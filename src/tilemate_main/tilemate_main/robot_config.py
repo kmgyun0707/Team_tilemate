@@ -13,5 +13,9 @@ class RobotConfig:
 @dataclass
 class GripperConfig:
     GRIPPER_NAME: str = "rg2"
+    #real
     TOOLCHARGER_IP: str = "192.168.1.1"
     TOOLCHARGER_PORT: str = "502"
+    #sim
+    # TOOLCHARGER_IP: str = "0.0.0.0"
+    # TOOLCHARGER_PORT: str = "1234"

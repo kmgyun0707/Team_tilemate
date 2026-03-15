@@ -327,7 +327,7 @@ class PlaceTileActionServer(Node):
 
             if not touched or contact_joint is None:
                 self.get_logger().warn("[CONTACT] failed (timeout/no joint)")
-                return (False, 0.0, "contact_failed")
+                return (True, 0.0, "contact_failed")
 
             # amovej(contact_joint, vel=40, acc=40)
 
@@ -469,7 +469,7 @@ class PlaceTileActionServer(Node):
             return (False, press_depth, "canceled")
 
         # 중간 홈 복귀
-        movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
+        movej(j_ready, vel=80, acc=80)
 
         if self.check_abort(goal_handle):
             return (False, press_depth, "canceled")
@@ -478,7 +478,7 @@ class PlaceTileActionServer(Node):
         tool_pre_release = posx([239.723, -354.567+10.0, 201.217, 122.919, -179.643, -57.826+180.0])
         tool_release = posx([239.723, -354.567+10.0, 120.736, 122.919, -179.643, -57.826+180.0])
 
-        movel(tool_pre_release, vel=30, acc=30)
+        movel(tool_pre_release, vel=80, acc=80)
         mwait()
         movel(tool_release, vel=30, acc=30)
         mwait()

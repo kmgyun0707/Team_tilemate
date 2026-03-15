@@ -1,16 +1,16 @@
-#goal
-int32 target_frames
-int32 pixel_threshold
-float32 match_dist_threshold
+# Goal
+int32 target_frames           # 검사에 사용할 누적 프레임 수
+int32 pixel_threshold         # 결함 픽셀 판정 임계값 (edge 차이 기준)
+float32 match_dist_threshold  # ROI(타일) 매칭 거리 임계값 (pose 기반)
+
 ---
-#result
-bool success
-string message
-int32 total_tiles
-int32 defective_tiles
+# Result
+bool success                  # 액션 수행 성공 여부
+string message                # 결과 상태 메시지
+PatternScore[] pattern_scores # 타일별 anomaly score 결과 리스트
+
 ---
-#feedback
-int32 step
-int32 current_frame
-float32 progress
-string state
+# Feedback
+int32 current_frame           # 현재까지 처리된 프레임 수
+float32 progress              # 진행률 (0.0 ~ 1.0)
+string state                  # 현재 상태 

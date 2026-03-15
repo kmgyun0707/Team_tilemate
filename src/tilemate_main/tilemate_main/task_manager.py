@@ -125,11 +125,14 @@ class TaskManagerNode(Node):
         if not bool(msg.data):
             return
 
+        # 이미 kill 처리 중이면 중복 처리 방지
+        if self.kill_requested:
+            return
+
         self.get_logger().warn("[TASK] /task/stop_soft=True received -> trigger kill path")
         self.kill_requested = True
         self._cancel_active_subgoal()
-        self._publish_stop()
-
+        # 여기서는 stop 재발행하지 않음
     # --------------------------------------------------
     # common state / feedback
     # --------------------------------------------------

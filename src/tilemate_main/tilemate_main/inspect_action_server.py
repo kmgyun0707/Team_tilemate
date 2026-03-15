@@ -2,8 +2,8 @@
 import copy
 import json
 import threading
-import requests
 import time
+import requests
 
 import rclpy
 import DR_init
@@ -18,6 +18,198 @@ from action_msgs.msg import GoalStatus
 from tilemate_msgs.action import Inspect, PatternInspect
 from tilemate_main.robot_config import RobotConfig, GripperConfig
 from tilemate_main.wall_tile_inspection_engine import WallTileInspectionEngine
+
+
+class PatternInspectClientHelper(Node):
+    """
+    pattern_inspect action client를 별도 노드/별도 executor thread에서 처리해서
+    inspect action server 내부 nested action deadlock을 피하기 위한 helper
+    """
+    def __init__(self, robot_id: str):
+        super().__init__("pattern_inspect_client_helper", namespace=robot_id)
+
+        self._cb_group = ReentrantCallbackGroup()
+        self._action_name = f"/{robot_id}/tile/pattern_inspect"
+
+        self._client = ActionClient(
+            self,
+            PatternInspect,
+            self._action_name,
+            callback_group=self._cb_group,
+        )
+
+        self._executor = MultiThreadedExecutor(num_threads=2)
+        self._executor.add_node(self)
+
+        self._spin_thread = threading.Thread(
+            target=self._executor.spin,
+            daemon=True,
+        )
+        self._spin_thread.start()
+
+        self.get_logger().info(f"[PATTERN_HELPER] ready: action={self._action_name}")
+
+    def shutdown_helper(self):
+        self.get_logger().info("[PATTERN_HELPER] shutdown start")
+
+        try:
+            self._executor.remove_node(self)
+        except Exception:
+            pass
+
+        try:
+            self.destroy_node()
+        except Exception:
+            pass
+
+        self.get_logger().info("[PATTERN_HELPER] shutdown done")
+
+    def call(self,
+             target_frames: int = 60,
+             pixel_threshold: int = 60,
+             match_dist_threshold: float = 50.0,
+             timeout_sec: float = 90.0):
+        """
+        pattern inspect action을 helper thread에서 호출하고
+        {pattern_name: anomaly_score} dict 반환
+        실패 시 None 반환
+        """
+        self.get_logger().info(
+            f"[PATTERN_HELPER] wait_for_server: {self._action_name}"
+        )
+
+        ok = self._client.wait_for_server(timeout_sec=3.0)
+        if not ok:
+            self.get_logger().warn("[PATTERN_HELPER] pattern action server not available")
+            return None
+
+        goal_msg = PatternInspect.Goal()
+        goal_msg.target_frames = int(target_frames)
+        goal_msg.pixel_threshold = int(pixel_threshold)
+        goal_msg.match_dist_threshold = float(match_dist_threshold)
+
+        self.get_logger().info(
+            "[PATTERN_HELPER] send_goal "
+            f"(target_frames={goal_msg.target_frames}, "
+            f"pixel_threshold={goal_msg.pixel_threshold}, "
+            f"match_dist_threshold={goal_msg.match_dist_threshold})"
+        )
+
+        done_event = threading.Event()
+        holder = {
+            "accepted": False,
+            "status": None,
+            "result": None,
+            "exception": None,
+        }
+
+        def _result_done_cb(fut):
+            try:
+                wrap = fut.result()
+                holder["status"] = getattr(wrap, "status", None)
+                holder["result"] = getattr(wrap, "result", None)
+
+                self.get_logger().info(
+                    f"[PATTERN_HELPER] result callback fired: status={holder['status']}"
+                )
+            except Exception as e:
+                holder["exception"] = e
+                self.get_logger().error(
+                    f"[PATTERN_HELPER] result callback exception: {e}"
+                )
+            finally:
+                done_event.set()
+
+        def _goal_done_cb(fut):
+            try:
+                goal_handle = fut.result()
+
+                if goal_handle is None:
+                    holder["exception"] = RuntimeError("goal_handle is None")
+                    done_event.set()
+                    return
+
+                holder["accepted"] = bool(goal_handle.accepted)
+
+                self.get_logger().info(
+                    f"[PATTERN_HELPER] goal response: accepted={goal_handle.accepted}"
+                )
+
+                if not goal_handle.accepted:
+                    done_event.set()
+                    return
+
+                result_future = goal_handle.get_result_async()
+                result_future.add_done_callback(_result_done_cb)
+
+            except Exception as e:
+                holder["exception"] = e
+                self.get_logger().error(
+                    f"[PATTERN_HELPER] goal callback exception: {e}"
+                )
+                done_event.set()
+
+        send_goal_future = self._client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(_goal_done_cb)
+
+        start_t = time.time()
+        while rclpy.ok():
+            if done_event.wait(timeout=0.1):
+                break
+
+            if (time.time() - start_t) > timeout_sec:
+                self.get_logger().warn("[PATTERN_HELPER] timeout")
+                return None
+
+        if holder["exception"] is not None:
+            self.get_logger().error(
+                f"[PATTERN_HELPER] failed: {holder['exception']}"
+            )
+            return None
+
+        if not holder["accepted"]:
+            self.get_logger().warn("[PATTERN_HELPER] goal rejected")
+            return None
+
+        if holder["status"] != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().warn(
+                f"[PATTERN_HELPER] action failed: status={holder['status']}"
+            )
+            return None
+
+        result = holder["result"]
+        if result is None:
+            self.get_logger().warn("[PATTERN_HELPER] result is None")
+            return None
+
+        self.get_logger().info(
+            f"[PATTERN_HELPER] result success={result.success}, "
+            f"message={result.message}, count={len(result.pattern_scores)}"
+        )
+
+        if not result.success:
+            self.get_logger().warn(
+                f"[PATTERN_HELPER] result failure: {result.message}"
+            )
+            return None
+
+        out = {}
+        for item in result.pattern_scores:
+            try:
+                name = str(item.pattern_name).strip()
+                if not name:
+                    continue
+                out[name] = float(item.anomaly_score)
+                self.get_logger().info(
+                    f"[PATTERN_HELPER] parsed: name={name}, score={out[name]}"
+                )
+            except Exception as e:
+                self.get_logger().warn(
+                    f"[PATTERN_HELPER] parse failed: {e}"
+                )
+
+        self.get_logger().info(f"[PATTERN_HELPER] result map: {out}")
+        return out
 
 
 class InspectActionServer(Node):
@@ -39,22 +231,15 @@ class InspectActionServer(Node):
         self.web_result_url = self.get_parameter("web_result_url").value
         self.local_result_path = self.get_parameter("local_result_path").value
 
-        from tilemate_main.onrobot import RG
-        self.gripper = RG(
-            gripper_cfg.GRIPPER_NAME,
-            gripper_cfg.TOOLCHARGER_IP,
-            gripper_cfg.TOOLCHARGER_PORT,
-        )
+        # lazy init
+        self.gripper = None
+        self._gripper_initialized = False
+        self._robot_initialized = False
 
-        # -----------------------------
-        # callback groups 분리
-        # -----------------------------
+        # callback group
         self.server_cb_group = ReentrantCallbackGroup()
-        self.pattern_client_cb_group = ReentrantCallbackGroup()
 
-        # -----------------------------
         # action server
-        # -----------------------------
         self._action_server = ActionServer(
             self,
             Inspect,
@@ -65,40 +250,65 @@ class InspectActionServer(Node):
             callback_group=self.server_cb_group,
         )
 
-        # -----------------------------
-        # nested action client
-        # namespace 절대경로로 고정
-        # -----------------------------
-        self.pattern_action_name = f"/{robot_cfg.robot_id}/tile/pattern_inspect"
-        self._pattern_action_client = ActionClient(
-            self,
-            PatternInspect,
-            self.pattern_action_name,
-            callback_group=self.pattern_client_cb_group,
-        )
-
+        # inspection engine
         self.inspection_engine = WallTileInspectionEngine(self)
 
-        self.initialize_robot()
+        # pattern helper (별도 노드/별도 executor)
+        self.pattern_helper = PatternInspectClientHelper(robot_cfg.robot_id)
+
         self.get_logger().info(
-            f"\033[94m [2/3] [DEPTH_INSPECT] initialize Done! pattern_action={self.pattern_action_name}\033[0m"
+            f"[INSPECT] action server ready: /{robot_cfg.robot_id}/tile/inspect"
         )
 
-    def initialize_robot(self):
-        from DSR_ROBOT2 import (
-            set_tool,
-            set_tcp,
-            ROBOT_MODE_MANUAL,
-            ROBOT_MODE_AUTONOMOUS,
-            set_robot_mode,
-            wait,
-        )
+    def ensure_gripper_initialized(self):
+        if self._gripper_initialized and self.gripper is not None:
+            return True, "already_initialized"
 
-        set_robot_mode(ROBOT_MODE_MANUAL)
-        set_tool(self.robot_cfg.tool)
-        set_tcp(self.robot_cfg.tcp)
-        set_robot_mode(ROBOT_MODE_AUTONOMOUS)
-        wait(1.0)
+        try:
+            from tilemate_main.onrobot import RG
+
+            self.get_logger().info("[INSPECT] gripper init start")
+            self.gripper = RG(
+                self.gripper_cfg.GRIPPER_NAME,
+                self.gripper_cfg.TOOLCHARGER_IP,
+                self.gripper_cfg.TOOLCHARGER_PORT,
+            )
+            self._gripper_initialized = True
+            self.get_logger().info("[INSPECT] gripper init done")
+            return True, "gripper_initialized"
+
+        except Exception as e:
+            self.get_logger().error(f"[INSPECT] gripper init failed: {e}")
+            return False, str(e)
+
+    def ensure_robot_initialized(self):
+        if self._robot_initialized:
+            return True, "already_initialized"
+
+        try:
+            from DSR_ROBOT2 import (
+                set_tool,
+                set_tcp,
+                ROBOT_MODE_MANUAL,
+                ROBOT_MODE_AUTONOMOUS,
+                set_robot_mode,
+                wait,
+            )
+
+            self.get_logger().info("[INSPECT] robot init start")
+            set_robot_mode(ROBOT_MODE_MANUAL)
+            set_tool(self.robot_cfg.tool)
+            set_tcp(self.robot_cfg.tcp)
+            set_robot_mode(ROBOT_MODE_AUTONOMOUS)
+            wait(1.0)
+
+            self._robot_initialized = True
+            self.get_logger().info("[INSPECT] robot init done")
+            return True, "robot_initialized"
+
+        except Exception as e:
+            self.get_logger().error(f"[INSPECT] robot init failed: {e}")
+            return False, str(e)
 
     def move_to_inspect_pose(self):
         from DSR_ROBOT2 import posx, movesx, mwait
@@ -190,144 +400,38 @@ class InspectActionServer(Node):
         self.get_logger().warn("[INSPECT] cancel request received")
         return CancelResponse.ACCEPT
 
-    def call_pattern_inspect_action_blocking(self, timeout_sec: float = 60.0):
-        """
-        PatternInspect 액션을 동기적으로 호출한 것처럼 기다리고
-        { pattern_name: anomaly_score } dict를 반환한다.
-        실패 시 None 반환.
-        """
-        self.get_logger().info(
-            f"[INSPECT] waiting for pattern inspect action server... name={self.pattern_action_name}"
+    def call_pattern_inspect_action(self):
+        self.get_logger().info("[INSPECT] start pattern helper call")
+
+        result = self.pattern_helper.call(
+            target_frames=60,
+            pixel_threshold=60,
+            match_dist_threshold=50.0,
+            timeout_sec=90.0,
         )
 
-        ok = self._pattern_action_client.wait_for_server(timeout_sec=3.0)
-        if not ok:
-            self.get_logger().warn("[INSPECT] pattern inspect action server not available")
-            return None
+        self.get_logger().info(f"[INSPECT] pattern helper finished: {result}")
+        return result
 
-        goal_msg = PatternInspect.Goal()
-        goal_msg.target_frames = 60
-        goal_msg.pixel_threshold = 60
-        goal_msg.match_dist_threshold = 50.0
-
-        self.get_logger().info(
-            "[INSPECT] sending goal to pattern inspect action "
-            f"(target_frames={goal_msg.target_frames}, "
-            f"pixel_threshold={goal_msg.pixel_threshold}, "
-            f"match_dist_threshold={goal_msg.match_dist_threshold})"
-        )
-
-        done_event = threading.Event()
-        result_holder = {
-            "accepted": False,
-            "status": None,
-            "result": None,
-            "exception": None,
-        }
-
-        def _result_done_cb(result_future):
-            try:
-                result_wrap = result_future.result()
-                result_holder["status"] = getattr(result_wrap, "status", None)
-                result_holder["result"] = getattr(result_wrap, "result", None)
-
-                self.get_logger().info(
-                    f"[INSPECT] pattern result callback fired: status={result_holder['status']}"
-                )
-            except Exception as e:
-                result_holder["exception"] = e
-                self.get_logger().warn(f"[INSPECT] pattern result callback exception: {e}")
-            finally:
-                done_event.set()
-
-        def _goal_done_cb(goal_future):
-            try:
-                goal_handle = goal_future.result()
-
-                if goal_handle is None:
-                    result_holder["exception"] = RuntimeError("goal_handle is None")
-                    done_event.set()
-                    return
-
-                result_holder["accepted"] = bool(goal_handle.accepted)
-                self.get_logger().info(
-                    f"[INSPECT] pattern goal response received: accepted={goal_handle.accepted}"
-                )
-
-                if not goal_handle.accepted:
-                    done_event.set()
-                    return
-
-                result_future = goal_handle.get_result_async()
-                result_future.add_done_callback(_result_done_cb)
-
-            except Exception as e:
-                result_holder["exception"] = e
-                self.get_logger().warn(f"[INSPECT] pattern goal callback exception: {e}")
-                done_event.set()
-
-        send_goal_future = self._pattern_action_client.send_goal_async(goal_msg)
-        send_goal_future.add_done_callback(_goal_done_cb)
-
-        start_t = time.time()
-        while rclpy.ok():
-            if done_event.wait(timeout=0.1):
-                break
-
-            elapsed = time.time() - start_t
-            if elapsed > timeout_sec:
-                self.get_logger().warn("[INSPECT] pattern inspect action timeout")
-                return None
-
-        if result_holder["exception"] is not None:
-            self.get_logger().warn(
-                f"[INSPECT] pattern inspect action failed: {result_holder['exception']}"
-            )
-            return None
-
-        if not result_holder["accepted"]:
-            self.get_logger().warn("[INSPECT] pattern inspect goal rejected")
-            return None
-
-        pattern_result = result_holder["result"]
-        if pattern_result is None:
-            self.get_logger().warn("[INSPECT] pattern inspect result is None")
-            return None
-
-        self.get_logger().info(
-            f"[INSPECT] pattern result success={pattern_result.success}, "
-            f"message={pattern_result.message}, "
-            f"count={len(pattern_result.pattern_scores)}"
-        )
-
-        if not pattern_result.success:
-            self.get_logger().warn(
-                f"[INSPECT] pattern inspect reported failure: {pattern_result.message}"
-            )
-            return None
-
-        pattern_scores_map = {}
-        for item in pattern_result.pattern_scores:
-            try:
-                name = str(item.pattern_name).strip()
-                if not name:
-                    continue
-                score = float(item.anomaly_score)
-                pattern_scores_map[name] = score
-                self.get_logger().info(
-                    f"[INSPECT] parsed pattern score: name={name}, score={score}"
-                )
-            except Exception as e:
-                self.get_logger().warn(f"[INSPECT] failed to parse pattern score item: {e}")
-
-        self.get_logger().info(f"[INSPECT] pattern result map: {pattern_scores_map}")
-        return pattern_scores_map
-        
     async def execute_callback(self, goal_handle):
         result = Inspect.Result()
 
         try:
             self.get_logger().info("[INSPECT] start inspection action")
+
+            ok, msg = self.ensure_gripper_initialized()
+            if not ok:
+                goal_handle.abort()
+                result.success = False
+                result.message = f"gripper_init_failed:{msg}"
+                return result
+
+            ok, msg = self.ensure_robot_initialized()
+            if not ok:
+                goal_handle.abort()
+                result.success = False
+                result.message = f"robot_init_failed:{msg}"
+                return result
 
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
@@ -335,6 +439,9 @@ class InspectActionServer(Node):
                 result.message = "inspect_canceled_before_start"
                 return result
 
+            # --------------------------------------------------
+            # 1) gripper open
+            # --------------------------------------------------
             self.publish_feedback(goal_handle, 1, 0.1, "open_gripper")
             self.gripper.open_gripper()
 
@@ -344,6 +451,9 @@ class InspectActionServer(Node):
                 result.message = "inspect_canceled_after_open_gripper"
                 return result
 
+            # --------------------------------------------------
+            # 2) move inspect pose
+            # --------------------------------------------------
             self.publish_feedback(goal_handle, 2, 0.3, "move_to_inspect_pose")
             ok_move, move_msg = self.move_to_inspect_pose()
             if not ok_move:
@@ -359,9 +469,10 @@ class InspectActionServer(Node):
                 return result
 
             # --------------------------------------------------
-            # 1) 단차 검사
+            # 3) depth analyze
             # --------------------------------------------------
             self.publish_feedback(goal_handle, 3, 0.6, "depth_analyze")
+
             robot_posx = [380.705, 127.182, 109.804, 90.000, 90.001, 89.999]
             inspect_result = self.inspection_engine.analyze_once(robot_posx=robot_posx)
 
@@ -402,12 +513,10 @@ class InspectActionServer(Node):
                 return result
 
             # --------------------------------------------------
-            # 2) 패턴 검사
+            # 4) pattern inspect
             # --------------------------------------------------
             self.publish_feedback(goal_handle, 4, 0.75, "pattern_inspect")
-            self.get_logger().info("[INSPECT] start pattern inspect action")
-            pattern_scores = self.call_pattern_inspect_action_blocking()
-            self.get_logger().info(f"[INSPECT] pattern inspect finished: {pattern_scores}")
+            pattern_scores = self.call_pattern_inspect_action()
 
             if pattern_scores is None:
                 goal_handle.abort()
@@ -421,8 +530,14 @@ class InspectActionServer(Node):
                 result.message = "pattern_inspect_failed:empty_result"
                 return result
 
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                result.success = False
+                result.message = "inspect_canceled_after_pattern_analysis"
+                return result
+
             # --------------------------------------------------
-            # 3) anomaly_score만 payload에 merge
+            # 5) merge anomaly_score
             # --------------------------------------------------
             self.publish_feedback(goal_handle, 5, 0.85, "merge_pattern_scores")
 
@@ -449,12 +564,18 @@ class InspectActionServer(Node):
             self.get_logger().info(f"[INSPECT] merged payload: {result_dict}")
 
             # --------------------------------------------------
-            # 4) 내부/로컬 저장
+            # 6) internal/local save
             # --------------------------------------------------
+            self.get_logger().info("[INSPECT][DBG] before internal save")
             self._save_result_payload(result_dict)
+            self.get_logger().info("[INSPECT][DBG] after internal save")
 
             self.publish_feedback(goal_handle, 6, 0.9, "save_internal_and_local")
+
+            self.get_logger().info("[INSPECT][DBG] before local save")
             ok_local, local_msg = self.save_result_to_local(result_dict)
+            self.get_logger().info("[INSPECT][DBG] after local save")
+
             if ok_local:
                 self.get_logger().info(f"[INSPECT] local save success: {local_msg}")
             else:
@@ -467,10 +588,13 @@ class InspectActionServer(Node):
                 return result
 
             # --------------------------------------------------
-            # 5) 웹에 JSON 전송
+            # 7) web send
             # --------------------------------------------------
             self.publish_feedback(goal_handle, 7, 0.95, "send_result_to_web")
+
+            self.get_logger().info("[INSPECT][DBG] before web send")
             ok_web, web_msg = self.send_result_to_web(result_dict)
+            self.get_logger().info("[INSPECT][DBG] after web send")
 
             if ok_web:
                 self.get_logger().info("[INSPECT] web send success")
@@ -489,7 +613,7 @@ class InspectActionServer(Node):
                     )
 
             # --------------------------------------------------
-            # 6) 최종 성공
+            # 8) done
             # --------------------------------------------------
             self.publish_feedback(goal_handle, 8, 1.0, "done")
             goal_handle.succeed()
@@ -508,6 +632,8 @@ class InspectActionServer(Node):
             result.success = False
             result.message = f"exception:{e}"
             return result
+
+
 def main(args=None):
     rclpy.init(args=args)
 
@@ -533,6 +659,12 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info("Interrupted by user")
     finally:
+        try:
+            if hasattr(node, "pattern_helper") and node.pattern_helper is not None:
+                node.pattern_helper.shutdown_helper()
+        except Exception:
+            pass
+
         try:
             ex.remove_node(node)
         except Exception:

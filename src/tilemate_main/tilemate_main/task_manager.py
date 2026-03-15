@@ -513,9 +513,11 @@ class TaskManagerNode(Node):
 
     async def call_place_tile(self, goal_handle, tile_index, tile_type):
         goal = PlaceTile.Goal()
-        goal.placement_index = tile_index + 1
-        goal.max_press_force = 30.0
-        goal.target_press_depth = 5.0
+        goal.placement_index = 1
+        goal.search_force = 15.0
+        goal.press_force = 40.0
+        goal.hold_time = 0.8
+        goal.target_press_depth = 3.0
 
         return await self._run_action_subtask(
             client=self.place_client,

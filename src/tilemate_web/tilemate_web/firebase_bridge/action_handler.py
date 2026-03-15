@@ -13,8 +13,8 @@ import requests
 from tilemate_msgs.action import ExecuteJob
 from .constants import DESIGN_PATTERNS, TILE_SYMBOL_MAP
 
-FASTAPI_BASE_URL = "http://172.20.10.3:8000"
-#FASTAPI_BASE_URL = "http://192.168.10.48:8000"
+#FASTAPI_BASE_URL = "http://172.20.10.3:8000"
+FASTAPI_BASE_URL = "http://192.168.10.48:8000"
 
 
 class ActionHandlerMixin:

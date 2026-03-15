@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -23,7 +24,8 @@ DUMMY_PATH = CONFIG_DIR / "dummy.json"
 
 
 app = FastAPI(title="Wall Tile Inspection Web")
-
+STATIC_DIR = BASE_DIR / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # SSE 구독자별 큐
 subscribers: list[asyncio.Queue] = []
 
@@ -101,27 +103,54 @@ async def generate_dummy():
         "latest_path": str(LATEST_PATH),
         "history_path": str(history_path),
     }
+latest_data = {}
+
+#########for debug
+@app.post("/api/inspect/latest")
+async def set_latest(data: dict):
+    global latest_data
+    latest_data = data
+
+    event_data = {
+        "type": "inspect_updated",
+        "payload": data
+    }
+
+    for q in subscribers[:]:
+        try:
+            q.put_nowait(event_data)
+        except Exception:
+            if q in subscribers:
+                subscribers.remove(q)
+
+    return {"status": "stored"}
 @app.get("/api/inspect/latest")
 async def get_latest():
-    if LATEST_PATH.exists():
-        with open(LATEST_PATH, "r", encoding="utf-8") as f:
-            return JSONResponse(json.load(f))
+    return latest_data
+########
 
-    if DUMMY_PATH.exists():
-        with open(DUMMY_PATH, "r", encoding="utf-8") as f:
-            return JSONResponse(json.load(f))
 
-    return JSONResponse(
-        {
-            "success": False,
-            "message": "no inspection result yet",
-            "frame_id": "-",
-            "timestamp_sec": 0,
-            "wall": None,
-            "tiles": [],
-        },
-        status_code=200,
-    )
+# @app.get("/api/inspect/latest")
+# async def get_latest():
+#     if LATEST_PATH.exists():
+#         with open(LATEST_PATH, "r", encoding="utf-8") as f:
+#             return JSONResponse(json.load(f))
+
+#     if DUMMY_PATH.exists():
+#         with open(DUMMY_PATH, "r", encoding="utf-8") as f:
+#             return JSONResponse(json.load(f))
+
+#     return JSONResponse(
+#         {
+#             "success": False,
+#             "message": "no inspection result yet",
+#             "frame_id": "-",
+#             "timestamp_sec": 0,
+#             "wall": None,
+#             "tiles": [],
+#         },
+#         status_code=200,
+#     )
 # @app.get("/api/inspect/latest")
 # async def get_latest():
 #     # if not LATEST_PATH.exists():
@@ -228,10 +257,11 @@ async def post_inspect_result(request: Request):
 if __name__ == "__main__":
     uvicorn.run(
         "server:app",
-        host="172.20.10.3",
+        host="192.168.10.48",
         port=8000,
         reload=True,
         reload_excludes=["keyword_extraction.py", "STT.py"],
     )
 
 #host="192.168.10.48"
+#host="127.0.0.1" #내꺼면

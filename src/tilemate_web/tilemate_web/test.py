@@ -39,7 +39,8 @@ except ImportError:
     print("          pip install firebase-admin")
 
 # ── 설정 ──────────────────────────────────────────────────
-BASE_URL = "http://127.0.0.1:8000"
+#BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://192.168.10.48:8000"
 
 SERVICE_ACCOUNT_KEY_PATH = os.path.expanduser(
     "~/Team_tilemate/src/tilemate_web/config/co1-tiling-firebase-adminsdk-fbsvc-f4f88c3832.json"
@@ -283,7 +284,7 @@ def run_full_scenario(design: int = 1, tile_count: int = 9):
     """
     pattern_str, pattern_name = DESIGN_PATTERNS.get(design, DESIGN_PATTERNS[1])
     print(f"\n[전체 시나리오] design={design} ({pattern_name}), 전체 타일={tile_count}개")
-    print("웹 브라우저에서 http://127.0.0.1:8000 열어두세요!\n")
+    print("웹 브라우저에서 http://192.168.10.48:8000 열어두세요!\n")
 
     try:
         cycle_count = int(input(f"  테스트 사이클 수 (기본 2, 최대 {tile_count}): ").strip() or "2")

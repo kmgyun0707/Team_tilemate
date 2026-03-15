@@ -94,6 +94,7 @@ class TaskManagerNode(Node):
         self.pattern_inspect_client = ActionClient(
             self, PatternInspect, f"{robot_ns}/tile/pattern_inspect", callback_group=self.cb_group
         )
+
         self._current_total_tiles = 0
         self.current_tile_index = -1
         self.current_tile_type = -1
@@ -109,6 +110,7 @@ class TaskManagerNode(Node):
             # TileStepDef(self.TILE_STEP_INSPECT, "inspect", self._step_inspect),
             # TileStepDef(self.TILE_STEP_COMPACT, "compact", self._step_compact),
         ]
+
         self.get_logger().info(
             f"name={self.get_name()}, ns={self.get_namespace()}, fq={self.get_fully_qualified_name()}"
         )
@@ -216,6 +218,19 @@ class TaskManagerNode(Node):
         if goal_handle.is_cancel_requested:
             return True, f"canceled_{phase}"
         return False, ""
+
+    def _is_tile_absent_message(self, msg: str) -> bool:
+        if not msg:
+            return False
+
+        s = str(msg).lower()
+        keywords = [
+            "tile_not_found",
+            "tray_empty",
+            "depth_target_not_found",
+            "depth_value_missing",
+        ]
+        return any(k in s for k in keywords)
 
     # --------------------------------------------------
     # /kill
@@ -357,6 +372,7 @@ class TaskManagerNode(Node):
                 state=f"compact:{step}:{state}",
             )
         return _cb
+
     def _make_pattern_inspect_feedback_cb(self, goal_handle, tile_index: int, tile_type: int):
         def _cb(feedback_msg):
             fb = feedback_msg.feedback
@@ -373,6 +389,7 @@ class TaskManagerNode(Node):
                 state=f"inspect:pattern:{current_frame}:{state}",
             )
         return _cb
+
     # --------------------------------------------------
     # generic action runner
     # --------------------------------------------------
@@ -455,7 +472,6 @@ class TaskManagerNode(Node):
         )
 
     async def _step_inspect(self, ctx: TileRunContext):
-        # 단차검사
         ok, msg = await self.call_inspect(
             goal_handle=ctx.goal_handle,
             tile_index=ctx.tile_index,
@@ -464,7 +480,7 @@ class TaskManagerNode(Node):
         )
         if not ok:
             return False, f"depth_inspect_failed:{msg}"
-        # 패턴검사
+
         ok, msg = await self.call_pattern_inspect(
             goal_handle=ctx.goal_handle,
             tile_index=ctx.tile_index,
@@ -550,6 +566,7 @@ class TaskManagerNode(Node):
             goal_handle=goal_handle,
             phase_name="inspect",
         )
+
     async def call_pattern_inspect(self, goal_handle, tile_index, tile_type):
         goal = PatternInspect.Goal()
         goal.target_frames = 60
@@ -564,6 +581,7 @@ class TaskManagerNode(Node):
             goal_handle=goal_handle,
             phase_name="pattern_inspect",
         )
+
     async def call_press(self, goal_handle, tile_index, tile_type):
         goal = Press.Goal()
         goal.result_json_path = ""
@@ -599,25 +617,25 @@ class TaskManagerNode(Node):
     # async def execute_callback(self, goal_handle):
     #     result = ExecuteJob.Result()
     #     req = goal_handle.request
-
+    #
     #     self.active_job_goal = goal_handle
     #     self.active_sub_goal = None
     #     self.kill_requested = False
-
+    #
     #     try:
     #         layout = list(req.design_layout)
     #         total_tiles = len(layout)
     #         self._current_total_tiles = total_tiles
-
+    #
     #         start_tile_index = int(req.current_tile_index) if req.is_resume else 0
     #         start_step = int(req.current_step) if req.is_resume else self.TILE_STEP_IDLE
-
+    #
     #         if start_tile_index >= total_tiles:
     #             goal_handle.succeed()
     #             result.success = True
     #             result.message = "already_finished"
     #             return result
-
+    #
     #         for tile_index in range(start_tile_index, total_tiles):
     #             aborted, msg = self._check_abort_requested(goal_handle, "before_tile_start")
     #             if aborted:
@@ -630,10 +648,10 @@ class TaskManagerNode(Node):
     #                     result.success = False
     #                     result.message = msg
     #                 return result
-
+    #
     #             tile_type = int(layout[tile_index])
     #             tile_step_start = int(start_step) if (req.is_resume and tile_index == start_tile_index) else self.TILE_STEP_IDLE
-
+    #
     #             ok, msg = await self.run_single_tile(
     #                 goal_handle=goal_handle,
     #                 tile_index=tile_index,
@@ -641,7 +659,7 @@ class TaskManagerNode(Node):
     #                 total_tiles=total_tiles,
     #                 tile_step_start=tile_step_start,
     #             )
-
+    #
     #             if not ok:
     #                 if self.kill_requested:
     #                     goal_handle.abort()
@@ -656,7 +674,7 @@ class TaskManagerNode(Node):
     #                     result.success = False
     #                     result.message = msg
     #                 return result
-
+    #
     #         self._update_and_publish_feedback(
     #             goal_handle=goal_handle,
     #             tile_index=total_tiles - 1 if total_tiles > 0 else 0,
@@ -666,12 +684,12 @@ class TaskManagerNode(Node):
     #             state="done",
     #             overall_step=self.OVERALL_FINISHED,
     #         )
-
+    #
     #         goal_handle.succeed()
     #         result.success = True
     #         result.message = "all_tiles_completed"
     #         return result
-
+    #
     #     except Exception as e:
     #         self.get_logger().error(f"[TASK] execute failed: {repr(e)}")
     #         self.get_logger().error(traceback.format_exc())
@@ -682,7 +700,7 @@ class TaskManagerNode(Node):
     #         result.success = False
     #         result.message = f"exception:{repr(e)}"
     #         return result
-
+    #
     #     finally:
     #         self.active_job_goal = None
     #         self.active_sub_goal = None
@@ -961,7 +979,30 @@ class TaskManagerNode(Node):
 
             ok, msg = await step_def.runner(ctx)
             if not ok:
-                return False, f"{step_def.name}_failed:{msg}"
+                fail_msg = f"{step_def.name}_failed:{msg}"
+
+                # pick 단계에서 타일 없음 상태를 별도로 구분
+                if step_def.step_id == self.TILE_STEP_PICK and self._is_tile_absent_message(msg):
+                    self._update_and_publish_feedback(
+                        goal_handle=goal_handle,
+                        tile_index=tile_index,
+                        tile_type=tile_type,
+                        detail_step=self.TILE_STEP_PICK,
+                        detail_progress=1.0,
+                        state=f"pick:tile_absent:{msg}",
+                    )
+                    return False, f"tile_absent:{fail_msg}"
+
+                # 일반 실패 상태
+                self._update_and_publish_feedback(
+                    goal_handle=goal_handle,
+                    tile_index=tile_index,
+                    tile_type=tile_type,
+                    detail_step=step_def.step_id,
+                    detail_progress=1.0,
+                    state=f"{step_def.name}:failed:{msg}",
+                )
+                return False, fail_msg
 
             aborted, abort_msg = self._check_abort_requested(
                 goal_handle, f"after_{step_def.name}"

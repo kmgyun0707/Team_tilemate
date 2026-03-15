@@ -23,6 +23,7 @@ class DepthLocalizer:
         self.cy = None
         self.gripper2cam_path = gripper2cam_path
         self.use_inverse = use_inverse
+        self.last_filtered_depth = None
 
         self.node.create_subscription(
             Image,
@@ -190,6 +191,8 @@ class DepthLocalizer:
             filtered_depth = float(np.median(inliers))
         else:
             filtered_depth = float(median_depth)
+
+        self.last_filtered_depth = float(filtered_depth)
 
         return filtered_depth
 

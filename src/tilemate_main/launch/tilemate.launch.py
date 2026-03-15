@@ -44,4 +44,10 @@ def generate_launch_description():
             executable="task_manager",
             output="screen",
         ),
+        # 인터럽트 노드 (시연 시 /robot/command stop 처리)
+        Node(
+            package="tilemate_main",
+            executable="interrupt_node",
+            output="screen",
+        ),
     ])

@@ -6,6 +6,7 @@ import threading
 import cv2
 import numpy as np
 import rclpy
+import torch
 
 from rclpy.node import Node
 from rclpy.action import ActionServer, GoalResponse, CancelResponse
@@ -15,6 +16,8 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from ament_index_python.packages import get_package_share_directory
+from torchvision import transforms
+from anomalib.models import Patchcore
 
 from custom_tile_msgs.msg import TileArray
 from tilemate_msgs.action import PatternInspect
@@ -25,56 +28,81 @@ class PatternInspectActionServer(Node):
     def __init__(self):
         super().__init__("pattern_inspect_action_server")
 
+        # 액션 execute 루프와 이미지 콜백이 동시에 접근하는 상태를 보호하기 위한 그룹/브릿지
         self.cb_group = ReentrantCallbackGroup()
         self.bridge = CvBridge()
 
         # --------------------------------------------------
-        # pattern reference setup
+        # anomalib setup
         # --------------------------------------------------
+        # rule-based reference image 방식 대신 Patchcore 체크포인트를 로드해
+        # 액션형 패턴 검사 서버 내부에서 직접 추론을 수행한다.
         package_name = "tilemate_main"
         pkg_share_dir = get_package_share_directory(package_name)
-        img_base_dir = os.path.join(pkg_share_dir, "rule_based_img")
 
-        self.ref_image_paths = {
-            f"pattern_{i}": os.path.join(img_base_dir, f"ref_pattern_{i}.jpg")
-            for i in range(1, 10)
-        }
+        # 런치에서 쉽게 바꿀 수 있도록 모든 핵심 값은 파라미터로 받는다.
+        self.declare_parameter(
+            "ckpt_filename",
+            "dataset_1280_type6_patchcore.ckpt",
+        )
+        self.declare_parameter("target_pattern", "pattern_5")
+        self.declare_parameter("use_canny_filter", False)
+        self.declare_parameter("anomaly_threshold", -1.0)
 
-        self.safe_zones = {}
-        kernel = np.ones((11, 11), np.uint8)
-        self.default_pixel_threshold = 60
+        ckpt_filename = str(self.get_parameter("ckpt_filename").value)
+        self.target_pattern = str(self.get_parameter("target_pattern").value)
+        self.use_canny_filter = bool(self.get_parameter("use_canny_filter").value)
+
+        ckpt_path = os.path.join(pkg_share_dir, "resource", ckpt_filename)
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(
+                f"anomalib checkpoint not found: {ckpt_path}"
+            )
+
+        # GPU 사용 가능 시 cuda, 아니면 cpu로 자동 폴백
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = Patchcore.load_from_checkpoint(ckpt_path)
+        self.model.eval()
+        self.model.to(self.device)
+
+        # 임계값 우선순위
+        # 1) launch/CLI에서 anomaly_threshold 지정값(>0)
+        # 2) 체크포인트 내부 image_threshold
+        # 3) 하드코딩 기본값 0.65
+        self.anomaly_threshold = 0.65
+        threshold_param = float(self.get_parameter("anomaly_threshold").value)
+        if threshold_param > 0.0:
+            self.anomaly_threshold = threshold_param
+        else:
+            try:
+                if hasattr(self.model, "image_threshold"):
+                    self.anomaly_threshold = self.model.image_threshold.value.item()
+                elif hasattr(self.model, "metrics") and hasattr(self.model.metrics, "image_threshold"):
+                    self.anomaly_threshold = self.model.metrics.image_threshold.value.item()
+            except Exception:
+                pass
+
+        # Tile cropped image는 크기가 제각각이므로 모델 입력 크기를 고정한다.
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((512, 512), antialias=True),
+            transforms.ToTensor(),
+        ])
+
         self.default_target_frames = 60
         self.default_match_dist_threshold = 50.0
-
-        for pattern_name, img_path in self.ref_image_paths.items():
-            if not os.path.exists(img_path):
-                self.get_logger().warn(
-                    f"기준 이미지 없음: {img_path} ({pattern_name} 검사 불가)"
-                )
-                continue
-
-            ref_img = cv2.imread(img_path)
-            if ref_img is None:
-                self.get_logger().warn(
-                    f"기준 이미지 로드 실패: {img_path} ({pattern_name} 검사 불가)"
-                )
-                continue
-
-            ref_edges = self.get_canny_edges(ref_img)
-            self.safe_zones[pattern_name] = cv2.dilate(ref_edges, kernel, iterations=1)
-
-        
 
         # --------------------------------------------------
         # runtime state
         # --------------------------------------------------
+        # _inspect_running: 동시에 goal 2개가 겹치지 않도록 단일 실행을 보장
+        # _done_event: 프레임 수집 완료 시 execute 루프를 깨우는 신호
         self._lock = threading.Lock()
         self._active_goal_handle = None
         self._inspect_running = False
 
         self.current_frame_count = 0
         self.target_frames = self.default_target_frames
-        self.pixel_threshold = self.default_pixel_threshold
         self.match_dist_threshold = self.default_match_dist_threshold
         self.tracked_tiles = []
         self._last_header = None
@@ -89,6 +117,7 @@ class PatternInspectActionServer(Node):
         # --------------------------------------------------
         # ros interfaces
         # --------------------------------------------------
+        # 입력: YOLO 타일 배열(크롭 이미지 + pose + pattern)
         self.tile_sub = self.create_subscription(
             TileArray,
             "/yolo/tile_array",
@@ -97,9 +126,15 @@ class PatternInspectActionServer(Node):
             callback_group=self.cb_group,
         )
 
+        # 디버그용: 모델 입력 이미지(필터 적용 여부 확인)와 히트맵 오버레이
         self.debug_pub = self.create_publisher(
             Image,
-            "/anomaly/debug_rule_based",
+            "/anomaly/debug_canny",
+            10,
+        )
+        self.heatmap_pub = self.create_publisher(
+            Image,
+            "/anomaly/heatmap",
             10,
         )
 
@@ -114,11 +149,17 @@ class PatternInspectActionServer(Node):
         )
 
         self.get_logger().info("\033[94m [3/3] [PATTERN_INSPECT] initialize Done!\033[0m")
+        self.get_logger().info(
+            f"[PATTERN] anomalib ready | device={self.device}, target_pattern={self.target_pattern or 'ALL'}, "
+            f"threshold={self.anomaly_threshold:.4f}, use_canny_filter={self.use_canny_filter}"
+        )
 
     # --------------------------------------------------
     # action callbacks
     # --------------------------------------------------
     def goal_callback(self, goal_request):
+        # 액션 서버는 한 번에 하나의 검사만 수행한다.
+        # (프레임 누적 버퍼를 공유하므로 병렬 goal은 reject)
         with self._lock:
             if self._inspect_running:
                 self.get_logger().warn("[PATTERN] reject: already running")
@@ -127,7 +168,6 @@ class PatternInspectActionServer(Node):
         self.get_logger().info(
             f"[PATTERN] goal accepted: "
             f"target_frames={goal_request.target_frames}, "
-            f"pixel_threshold={goal_request.pixel_threshold}, "
             f"match_dist_threshold={goal_request.match_dist_threshold}"
         )
         return GoalResponse.ACCEPT
@@ -140,6 +180,8 @@ class PatternInspectActionServer(Node):
         result = PatternInspect.Result()
 
         with self._lock:
+            # goal 시작 시 런타임 파라미터를 action request 값으로 덮어쓴다.
+            # (기존 TaskManager/InspectActionServer와의 계약을 유지)
             self._active_goal_handle = goal_handle
             self._inspect_running = True
             self._done_event.clear()
@@ -149,11 +191,6 @@ class PatternInspectActionServer(Node):
                 int(req.target_frames)
                 if int(req.target_frames) > 0
                 else self.default_target_frames
-            )
-            self.pixel_threshold = (
-                int(req.pixel_threshold)
-                if int(req.pixel_threshold) > 0
-                else self.default_pixel_threshold
             )
             self.match_dist_threshold = (
                 float(req.match_dist_threshold)
@@ -179,6 +216,7 @@ class PatternInspectActionServer(Node):
         try:
             while rclpy.ok():
                 if goal_handle.is_cancel_requested:
+                    # cancel 요청 시 버퍼/상태를 즉시 비우고 종료
                     with self._lock:
                         self._inspect_running = False
                         self._active_goal_handle = None
@@ -193,6 +231,7 @@ class PatternInspectActionServer(Node):
                     break
 
             with self._lock:
+                # 콜백에서 만든 요약본을 action result로 패킹한다.
                 summary = dict(self._result_summary)
                 self._inspect_running = False
                 self._active_goal_handle = None
@@ -211,6 +250,8 @@ class PatternInspectActionServer(Node):
                     f"[PATTERN] pack score {i}: "
                     f"name={ps['pattern_name']}, score={ps['anomaly_score']}"
                 )
+                # tile_id / pattern_name / anomaly_score 형식은
+                # 상위 InspectActionServer merge 로직과 맞춘다.
                 score_msg = PatternScore()
                 score_msg.tile_id = int(ps["tile_id"])
                 score_msg.pattern_name = str(ps["pattern_name"])
@@ -244,24 +285,58 @@ class PatternInspectActionServer(Node):
             result.message = f"exception: {e}"
             return result
 
-    # --------------------------------------------------
-    # image preprocessing
-    # --------------------------------------------------
-    def get_canny_edges(self, cv_img):
+    def apply_industry_filter(self, cv_img):
+        # 고주파 노이즈 완화 + 대비 보정으로 금속/타일 표면 질감 안정화
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        gray_clahe = clahe.apply(blurred)
-        edges = cv2.Canny(gray_clahe, 35, 95)
+        filtered = cv2.bilateralFilter(gray, 9, 75, 75)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe_img = clahe.apply(filtered)
+        return cv2.cvtColor(clahe_img, cv2.COLOR_GRAY2RGB)
 
-        h, w = edges.shape
-        cv2.rectangle(edges, (0, 0), (w - 1, h - 1), 0, thickness=5)
-        return edges
+    def _extract_pred_score(self, output):
+        # anomalib 반환 타입(dict/tuple/object)이 버전에 따라 달라질 수 있어
+        # 공통 추출 루틴으로 단일 float 점수로 정규화한다.
+        if hasattr(output, "pred_score"):
+            pred_score = output.pred_score
+        elif isinstance(output, dict):
+            pred_score = output.get("pred_score", 0.0)
+        elif isinstance(output, tuple) and len(output) > 1:
+            pred_score = output[1]
+        else:
+            pred_score = 0.0
+
+        if isinstance(pred_score, torch.Tensor):
+            if pred_score.numel() == 0:
+                return 0.0
+            pred_score = pred_score.detach().float().mean().cpu().item()
+
+        return float(pred_score)
+
+    def _extract_anomaly_map(self, output):
+        # heatmap 시각화를 위한 anomaly_map을 안전하게 추출/정규화
+        if hasattr(output, "anomaly_map"):
+            anomaly_map = output.anomaly_map
+        elif isinstance(output, dict):
+            anomaly_map = output.get("anomaly_map", None)
+        elif isinstance(output, tuple) and len(output) > 0:
+            anomaly_map = output[0]
+        else:
+            anomaly_map = None
+
+        if anomaly_map is None:
+            return None
+
+        if isinstance(anomaly_map, torch.Tensor):
+            anomaly_map = anomaly_map.detach().cpu().numpy()
+
+        anomaly_map = np.squeeze(np.array(anomaly_map, dtype=np.float32))
+        return anomaly_map
 
     # --------------------------------------------------
     # subscriber callback
     # --------------------------------------------------
     def inference_callback(self, msg: TileArray):
+        # 액션 진행 중일 때만 프레임을 누적한다.
         with self._lock:
             if not self._inspect_running:
                 return
@@ -271,33 +346,38 @@ class PatternInspectActionServer(Node):
 
         try:
             local_debug_images = []
+            inspected_any = False
 
             for tile in msg.tiles:
                 current_pattern = tile.pattern_name
 
-                if current_pattern not in self.safe_zones:
-                    self.get_logger().warn(
-                        f"등록되지 않은 패턴({current_pattern}) 감지! 검사 생략."
-                    )
+                # target_pattern이 설정된 경우 해당 패턴만 수집해
+                # 불필요한 오검출/계산량을 줄인다.
+                if self.target_pattern and current_pattern != self.target_pattern:
                     continue
 
-                target_safe_zone = self.safe_zones[current_pattern]
+                inspected_any = True
 
-                curr_img = self.bridge.imgmsg_to_cv2(
+                cv_img = self.bridge.imgmsg_to_cv2(
                     tile.cropped_image,
                     desired_encoding="bgr8",
                 )
-                curr_img = cv2.resize(
-                    curr_img,
-                    (target_safe_zone.shape[1], target_safe_zone.shape[0]),
-                )
+                h, w = cv_img.shape[:2]
 
-                curr_edges = self.get_canny_edges(curr_img)
-                defect_edges = cv2.subtract(curr_edges, target_safe_zone)
+                if self.use_canny_filter:
+                    model_input_img = self.apply_industry_filter(cv_img)
+                else:
+                    model_input_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
 
-                defect_pixel_count = int(np.sum(defect_edges > 0))
-                is_defect = bool(defect_pixel_count > self.pixel_threshold)
+                input_tensor = self.transform(model_input_img).unsqueeze(0).to(self.device)
+                with torch.no_grad():
+                    output = self.model(input_tensor)
 
+                pred_score = self._extract_pred_score(output)
+                anomaly_map = self._extract_anomaly_map(output)
+                is_defect = bool(pred_score > self.anomaly_threshold)
+
+                # 프레임 간 동일 타일 매칭: pose(x, y) 거리 기반 nearest-like 누적
                 matched = False
                 for tt in self.tracked_tiles:
                     dist = math.hypot(
@@ -306,7 +386,7 @@ class PatternInspectActionServer(Node):
                     )
 
                     if dist < self.match_dist_threshold:
-                        tt["crack_history"].append(defect_pixel_count)
+                        tt["score_history"].append(pred_score)
                         tt["vote_history"].append(is_defect)
                         tt["pose"] = tile.pose
                         matched = True
@@ -315,14 +395,18 @@ class PatternInspectActionServer(Node):
                 if not matched:
                     self.tracked_tiles.append(
                         {
-                            "pose": tile.pose,  # tracking 내부용
+                            "pose": tile.pose,
                             "pattern_name": current_pattern,
-                            "crack_history": [defect_pixel_count],
+                            "score_history": [pred_score],
                             "vote_history": [is_defect],
                         }
                     )
 
-                local_debug_images.append((curr_img, defect_edges))
+                local_debug_images.append((cv_img, model_input_img, anomaly_map, w, h))
+
+            if not inspected_any:
+                # 이번 프레임에 타깃 패턴이 없으면 프레임 카운트를 올리지 않는다.
+                return
 
             self.current_frame_count += 1
             self._last_header = msg.header
@@ -346,16 +430,32 @@ class PatternInspectActionServer(Node):
             )
 
             if self.current_frame_count == self.target_frames:
-                for curr_img, defect_edges in local_debug_images:
-                    curr_img_debug = curr_img.copy()
-                    curr_img_debug[defect_edges > 0] = [0, 0, 255]
-                    debug_msg = self.bridge.cv2_to_imgmsg(
-                        curr_img_debug,
-                        encoding="bgr8",
+                # 마지막 프레임에서만 디버그/히트맵 발행 (대역폭 절감)
+                for cv_img, model_input_img, anomaly_map, w, h in local_debug_images:
+                    if anomaly_map is not None:
+                        norm_max = self.anomaly_threshold * 2.0
+                        a_map_norm = np.clip(anomaly_map / (norm_max + 1e-5), 0, 1)
+                        a_map_resized = cv2.resize(
+                            (a_map_norm * 255).astype(np.uint8),
+                            (int(w), int(h)),
+                            interpolation=cv2.INTER_CUBIC,
+                        )
+                        heatmap = cv2.applyColorMap(a_map_resized, cv2.COLORMAP_JET)
+                        overlay = cv2.addWeighted(cv_img, 0.5, heatmap, 0.5, 0)
+                        self.heatmap_pub.publish(
+                            self.bridge.cv2_to_imgmsg(overlay, encoding="bgr8")
+                        )
+
+                    debug_bgr = (
+                        cv2.cvtColor(model_input_img, cv2.COLOR_RGB2BGR)
+                        if model_input_img is not None and len(model_input_img.shape) == 3
+                        else cv_img
                     )
+                    debug_msg = self.bridge.cv2_to_imgmsg(debug_bgr, encoding="bgr8")
                     self.debug_pub.publish(debug_msg)
 
             if self.current_frame_count >= self.target_frames:
+                # 누적 프레임 달성 시 즉시 최종 점수 생성 후 execute 루프에 완료 신호 전달
                 pattern_scores = self.publish_final_results()
 
                 self._result_summary = {
@@ -395,29 +495,27 @@ class PatternInspectActionServer(Node):
         )
 
         for idx, tt in enumerate(self.tracked_tiles):
+            # 관측 횟수가 너무 적은 타일은 노이즈로 판단해 제외
             if len(tt["vote_history"]) < (self.target_frames / 2):
                 continue
 
             total_votes = len(tt["vote_history"])
-            avg_cracks = sum(tt["crack_history"]) / total_votes
-
-            anomaly_score = min(
-                1.0,
-                avg_cracks / float(max(1, self.pixel_threshold))
-            )
+            # anomaly_score는 pred_score 평균값으로 정의
+            # (상위 merge 단계에서 pattern_name별 단일 점수가 필요)
+            avg_score = sum(tt["score_history"]) / total_votes
 
             pattern_scores.append(
                 {
                     "tile_id": idx + 1,
                     "pattern_name": tt["pattern_name"],
-                    "anomaly_score": float(anomaly_score),
+                    "anomaly_score": float(avg_score),
                 }
             )
 
             self.get_logger().info(
                 f"[{tt['pattern_name']}] 타일 {idx + 1} | "
-                f"avg_cracks={avg_cracks:.1f}px | "
-                f"anomaly_score={anomaly_score:.2f}"
+                f"avg_score={avg_score:.4f} | "
+                f"threshold={self.anomaly_threshold:.4f}"
             )
 
         self.get_logger().info("=========================================")
@@ -428,6 +526,8 @@ class PatternInspectActionServer(Node):
     # utils
     # --------------------------------------------------
     def publish_feedback(self, goal_handle, current_frame: int, progress: float, state: str):
+        # TaskManager/InspectActionServer가 진행률을 읽을 수 있도록
+        # 프레임 기반 피드백을 지속 발행한다.
         fb = PatternInspect.Feedback()
         fb.current_frame = int(current_frame)
         fb.progress = float(progress)

@@ -10,7 +10,6 @@ def generate_launch_description():
     pkg_share = get_package_share_directory("tilemate_main")
 
     npy_path = os.path.join(pkg_share, "resource", "T_gripper2camera.npy")
-    rule_based_img_path = os.path.join(pkg_share, "resource", "rule_based_img")
 
     yolo_node = Node(
         package="tilemate_main",
@@ -32,6 +31,16 @@ def generate_launch_description():
         executable="pattern_inspect_action_server",
         namespace="dsr01",
         output="screen",
+        parameters=[{
+            # anomalib checkpoint 파일명 (share/tilemate_main/resource 기준)
+            "ckpt_filename": "dataset_1280_type6_patchcore.ckpt",
+            # 빈 문자열("")이면 모든 패턴 대상, 기본은 pattern_5 집중 검사
+            "target_pattern": "pattern_5",
+            # True면 bilateral+CLAHE 전처리 후 모델 입력
+            "use_canny_filter": False,
+            # -1.0이면 체크포인트 내 threshold 자동 사용
+            "anomaly_threshold": -1.0,
+        }],
     )
 
     return LaunchDescription([

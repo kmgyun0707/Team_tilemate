@@ -36,6 +36,7 @@ setup(
             'cowork_action_server = tilemate_main.cowork_action_server:main',
             'inspect_action_server = tilemate_main.inspect_action_server:main',
             'task_manager = tilemate_main.task_manager:main',
+            'interrupt_node = tilemate_main.interrupt_node:main',
             'depthtest = tilemate_main.depthtest:main',
             'yolo_obb_cls_node = tilemate_main.yolo_obb_cls_node:main',
             'press_action_server = tilemate_main.press_action_server:main',

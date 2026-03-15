@@ -10,7 +10,7 @@ from rclpy.action import ActionServer, ActionClient, GoalResponse, CancelRespons
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 from std_srvs.srv import Trigger
 from action_msgs.msg import GoalStatus
 
@@ -73,6 +73,13 @@ class TaskManagerNode(Node):
         )
 
         self.pub_robot_cmd = self.create_publisher(String, "/robot/command", 10)
+        self.create_subscription(
+            Bool,
+            "/task/stop_soft",
+            self._cb_stop_soft,
+            10,
+            callback_group=self.cb_group,
+        )
 
         robot_ns = f"/{RobotConfig.robot_id}"
 
@@ -113,6 +120,15 @@ class TaskManagerNode(Node):
             f"name={self.get_name()}, ns={self.get_namespace()}, fq={self.get_fully_qualified_name()}"
         )
         self.get_logger().info("\033[94m [1/6] [TASK_MANAGER] initialize Done!\033[0m")
+
+    def _cb_stop_soft(self, msg: Bool):
+        if not bool(msg.data):
+            return
+
+        self.get_logger().warn("[TASK] /task/stop_soft=True received -> trigger kill path")
+        self.kill_requested = True
+        self._cancel_active_subgoal()
+        self._publish_stop()
 
     # --------------------------------------------------
     # common state / feedback

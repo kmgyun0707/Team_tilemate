@@ -132,6 +132,30 @@ cd ~/Team_tilemate && source install/setup.bash
 ros2 launch tilemate_main tilemate.launch.py
 ```
 
+### 4. 시연용 테스트 (Goal -> Stop)
+
+- 메인/비전 런치가 모두 실행된 상태에서 사용합니다.
+
+```bash
+source ~/Team_tilemate/install/setup.bash
+```
+
+```bash
+# 1) 테스트 goal 전송 (1개 타일)
+ros2 action send_goal /task/run_job tilemate_msgs/action/ExecuteJob \
+"{token: 'demo-001', design_layout: [1], is_resume: false, completed_jobs: 0, current_step: 0, current_tile_index: 0}" --feedback
+```
+
+```bash
+# 2) 정지 명령 (interrupt_node 경유)
+ros2 topic pub --once /robot/command std_msgs/msg/String "{data: stop}"
+```
+
+```bash
+# 3) 강제 중단 대안 (task_manager kill)
+ros2 service call /kill std_srvs/srv/Trigger "{}"
+```
+
 
 
 

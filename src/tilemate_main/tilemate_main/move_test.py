@@ -186,6 +186,14 @@ def perform_task_once(i:int):
 
     JReady = posj([0, 0, 90, 0, 90, 0])
 
+    print("[TASK] 8. move to inspect pose")
+    move_to_inspect_pose()
+    
+    print("[TASK] 9. inspecting... (테스트용 대기)")
+    # 실제 검사 액션 클라이언트를 호출하거나 대기하는 로직이 들어갈 자리입니다.
+    # 일단은 로봇이 해당 위치에서 3초간 멈춰서 검사하는 척(?) 하도록 wait를 줍니다.
+    wait(30.0)
+
     # ----------------------------
     # 툴 파지전
     # ----------------------------
@@ -293,6 +301,21 @@ def perform_task_once(i:int):
 
     print(f"[TASK] INDEX: {i} TILE  DONE")
 
+
+def move_to_inspect_pose():
+    from DSR_ROBOT2 import posx, movesx, mwait
+    
+    # 3개의 웨이포인트를 부드럽게 이어서 이동
+    candidates = [
+        posx([380.673, 177.227, 179.848, 89.893, 91.919, 92.747]),
+        posx([380.705, 157.182, 139.804, 90.000, 90.001, 89.999]),
+        posx([380.705, 127.182, 109.804, 90.000, 90.001, 89.999]),
+    ]
+    
+    print("[INSPECT] 검사 위치로 이동 중...")
+    movesx(candidates, time=5.0)
+    mwait()
+    print("[INSPECT] 검사 위치 도착 완료")
 
 def main(args=None):
     """메인 함수: ROS2 노드 초기화 및 동작 수행"""

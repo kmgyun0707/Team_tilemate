@@ -33,7 +33,7 @@ class InspectActionServer(Node):
         self._last_result_payload = None
         self._result_history = []
 
-        self.declare_parameter("web_result_url", "http://192.168.10.48:8000/api/inspect/result")
+        self.declare_parameter("web_result_url", "http://192.168.10.22:8000/api/inspect/result")
         self.declare_parameter("local_result_path", "inspect_result.json")
 
         self.web_result_url = self.get_parameter("web_result_url").value

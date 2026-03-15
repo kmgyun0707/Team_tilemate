@@ -52,7 +52,7 @@ class RuleBasedAnomalyNode(Node):
         # ==========================================
         # 🔥 2. 프레임 누적(버퍼) 트래킹 변수 세팅
         # ==========================================
-        self.TARGET_FRAMES = 60          # 누적 검사할 프레임 수
+        self.TARGET_FRAMES = 60        # 누적 검사할 프레임 수
         self.current_frame_count = 0     # 현재 누적된 프레임
         self.tracked_tiles = []          # 타일별 이력(History)을 저장할 버퍼
         self.MATCH_DIST_THRESHOLD = 50.0 # 이전 프레임 타일과 동일 타일로 간주할 픽셀 거리 오차

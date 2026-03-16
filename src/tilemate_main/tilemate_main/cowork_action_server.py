@@ -68,7 +68,7 @@ class CoworkActionServer(Node):
         )
 
         self.initialize_robot()
-        self.get_logger().info("\033[94m [3/6] [COWORK_TILE] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [3/5] [COWORK_TILE] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # event callbacks

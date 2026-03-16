@@ -50,7 +50,7 @@ class PressActionServer(Node):
         )
 
         self.initialize_robot()
-        self.get_logger().info("\033[94m [6/6] [PRESS] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [5/5] [PRESS] initialize Done!\033[0m")
 
     # ----------------------------
     # Action callbacks

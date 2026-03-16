@@ -114,7 +114,7 @@ class TaskManagerNode(Node):
         self.get_logger().info(
             f"name={self.get_name()}, ns={self.get_namespace()}, fq={self.get_fully_qualified_name()}"
         )
-        self.get_logger().info("\033[94m [1/6] [TASK_MANAGER] initialize Done!\033[0m")
+        self.get_logger().info("\033[94m [1/5] [TASK_MANAGER] initialize Done!\033[0m")
 
     # --------------------------------------------------
     # common state / feedback
@@ -529,7 +529,7 @@ class TaskManagerNode(Node):
 
     async def call_place_tile(self, goal_handle, tile_index, tile_type):
         goal = PlaceTile.Goal()
-        goal.placement_index = 1
+        goal.placement_index = tile_index+1
         goal.search_force = 15.0
         goal.press_force = 40.0
         goal.hold_time = 0.8

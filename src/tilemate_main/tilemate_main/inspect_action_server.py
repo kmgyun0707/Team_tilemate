@@ -225,8 +225,8 @@ class InspectActionServer(Node):
         self._last_result_payload = None
         self._result_history = []
 
-        # self.declare_parameter("web_result_url", "http://192.168.10.22:8000/api/inspect/result")
-        self.declare_parameter("web_result_url", "http://192.168.10.39:8000/api/inspect/result")
+        self.declare_parameter("web_result_url", "http://192.168.10.22:8000/api/inspect/result")
+        # self.declare_parameter("web_result_url", "http://192.168.10.39:8000/api/inspect/result")
 
         self.declare_parameter("local_result_path", "inspect_result.json")
 
@@ -258,9 +258,7 @@ class InspectActionServer(Node):
         # pattern helper (별도 노드/별도 executor)
         self.pattern_helper = PatternInspectClientHelper(robot_cfg.robot_id)
 
-        self.get_logger().info(
-            f"[INSPECT] action server ready: /{robot_cfg.robot_id}/tile/inspect"
-        )
+        self.get_logger().info("\033[94m [2/3] [INSPECT] initialize Done!\033[0m")
 
     def ensure_gripper_initialized(self):
         if self._gripper_initialized and self.gripper is not None:

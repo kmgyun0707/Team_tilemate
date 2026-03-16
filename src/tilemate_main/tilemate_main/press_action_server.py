@@ -401,7 +401,7 @@ class PressActionServer(Node):
 
             if not touched:
                 self.get_logger().warn("[CONTACT] failed (timeout)")
-                return (False, 0.0, "contact_failed")
+                return (True, 0.0, "contact_failed")
 
             # 4) 추가 누르기
             dy = sign * float(press_depth_mm)

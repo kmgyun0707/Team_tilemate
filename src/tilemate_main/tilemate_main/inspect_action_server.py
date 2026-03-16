@@ -320,7 +320,7 @@ class InspectActionServer(Node):
         ]
 
         try:
-            ret_move = movesx(candidates, time=5.0)
+            ret_move = movesx(candidates, vel=30, acc=30)
             ret_wait = mwait()
             self.get_logger().info(f"[INSPECT] movesx ret={ret_move}, mwait ret={ret_wait}")
 

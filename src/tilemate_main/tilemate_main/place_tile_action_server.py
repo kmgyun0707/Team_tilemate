@@ -19,6 +19,7 @@ class PlaceTileActionServer(Node):
         self._boot_node = boot_node
         self.robot_cfg = robot_cfg
         self.gripper_cfg = gripper_cfg
+        self.placement_index = 0
 
         self.cb_group = ReentrantCallbackGroup()
 
@@ -38,7 +39,7 @@ class PlaceTileActionServer(Node):
             gripper_cfg.TOOLCHARGER_IP,
             gripper_cfg.TOOLCHARGER_PORT,
         )
-        self.placement_index = 0
+
         self.initialize_robot()
         self.get_logger().info("\033[94m [4/5] [PLACE_TILE] initialize Done!\033[0m")
 
@@ -54,18 +55,29 @@ class PlaceTileActionServer(Node):
             self.get_logger().warn("Reject goal: placement_index must be <= 9")
             return GoalResponse.REJECT
 
-        if goal_request.max_press_force <= 0.0:
-            self.get_logger().warn("Reject goal: max_press_force <= 0")
+        if goal_request.search_force <= 0.0:
+            self.get_logger().warn("Reject goal: search_force <= 0")
+            return GoalResponse.REJECT
+
+        if goal_request.press_force <= 0.0:
+            self.get_logger().warn("Reject goal: press_force <= 0")
+            return GoalResponse.REJECT
+
+        if goal_request.hold_time <= 0.0:
+            self.get_logger().warn("Reject goal: hold_time <= 0")
             return GoalResponse.REJECT
 
         if goal_request.target_press_depth < 0.0:
             self.get_logger().warn("Reject goal: target_press_depth < 0")
             return GoalResponse.REJECT
 
-        self.placement_index = goal_request.placement_index
+        self.placement_index = int(goal_request.placement_index)
+
         self.get_logger().info(
             f"Goal accepted: placement_index={goal_request.placement_index}, "
-            f"max_press_force={goal_request.max_press_force:.3f}, "
+            f"search_force={goal_request.search_force:.3f}, "
+            f"press_force={goal_request.press_force:.3f}, "
+            f"hold_time={goal_request.hold_time:.3f}, "
             f"target_press_depth={goal_request.target_press_depth:.3f}"
         )
         return GoalResponse.ACCEPT
@@ -118,7 +130,6 @@ class PlaceTileActionServer(Node):
             ROBOT_MODE_MANUAL,
             ROBOT_MODE_AUTONOMOUS,
             set_robot_mode,
-            wait,
         )
 
         self.get_logger().info("[PLACE_TILE] initialize_robot()")
@@ -195,38 +206,31 @@ class PlaceTileActionServer(Node):
 
         return None
 
-    def publish_feedback(
-        self,
-        goal_handle,
-        state: str,
-        ft=None,
-        pressed_depth: float = 0.0,
-        progress: float = 0.0,
-    ):
-        fb = PlaceTile.Feedback()
-        fb.state = state
+    def publish_feedback(self, goal_handle, state: str, ft, pressed_depth: float, progress: float):
+        feedback = PlaceTile.Feedback()
+        feedback.state = str(state)
 
-        if ft is not None:
-            fb.fx = float(ft[0])
-            fb.fy = float(ft[1])
-            fb.fz = float(ft[2])
-            fb.tx = float(ft[3])
-            fb.ty = float(ft[4])
-            fb.tz = float(ft[5])
+        if ft is not None and len(ft) >= 6:
+            feedback.fx = float(ft[0])
+            feedback.fy = float(ft[1])
+            feedback.fz = float(ft[2])
+            feedback.tx = float(ft[3])
+            feedback.ty = float(ft[4])
+            feedback.tz = float(ft[5])
         else:
-            fb.fx = 0.0
-            fb.fy = 0.0
-            fb.fz = 0.0
-            fb.tx = 0.0
-            fb.ty = 0.0
-            fb.tz = 0.0
+            feedback.fx = 0.0
+            feedback.fy = 0.0
+            feedback.fz = 0.0
+            feedback.tx = 0.0
+            feedback.ty = 0.0
+            feedback.tz = 0.0
 
-        fb.pressed_depth = float(pressed_depth)
-        fb.progress = float(progress)
-        goal_handle.publish_feedback(fb)
+        feedback.pressed_depth = float(pressed_depth)
+        feedback.progress = float(progress)
+        goal_handle.publish_feedback(feedback)
 
     # ----------------------------
-    # compaction
+    # Compaction
     # ----------------------------
     def compact_tile(
         self,
@@ -241,41 +245,37 @@ class PlaceTileActionServer(Node):
             check_force_condition,
             get_current_posx,
             get_current_posj,
-            amovej,
             wait,
             release_force,
             DR_FC_MOD_REL,
             DR_AXIS_Y,
             DR_BASE,
-            DR_TOOL,
         )
 
         req = goal_handle.request
 
-        STX_Y = 20
-        STX_ROL = 10
-        STX_PIT = 10
-        STX_YAW = 10
+        STX_Y = 50
+        STX_ROL = 50
+        STX_PIT = 50
+        STX_YAW = 50
 
-        Force = float(req.max_press_force)
-
-        self.get_logger().info(
-            f"[SMART_TWIST] start | "
-            f"Force={Force:.3f}, Stx_z={STX_Y}, "
-            f"Stx_roll={STX_ROL}, Stx_pitch={STX_PIT}, Stx_yaw={STX_YAW}"
-        )
+        search_force = float(req.search_force)
+        press_force = float(req.press_force)
+        hold_time = float(req.hold_time)
 
         if self.check_abort(goal_handle):
             return (False, 0.0, "canceled")
 
         set_ref_coord(DR_BASE)
+
         task_compliance_ctrl(
             stx=[3000, STX_Y, 3000, STX_ROL, STX_PIT, STX_YAW],
             time=0.0
         )
+
         wait(0.2)
 
-        search_force = min(30.0, Force)
+        # 1차: 약한 힘으로 접촉 탐색
         set_desired_force(
             fd=[0, search_force, 0, 0, 0, 0],
             dir=[0, 1, 0, 0, 0, 0],
@@ -284,6 +284,7 @@ class PlaceTileActionServer(Node):
 
         t0 = time.time()
         last_log = 0.0
+
         touched = False
         contact_y = 0.0
         contact_joint = None
@@ -304,9 +305,11 @@ class PlaceTileActionServer(Node):
                             f"[FT][SEARCH] Fx={ft[0]:7.2f} Fy={ft[1]:7.2f} Fz={ft[2]:7.2f} | "
                             f"Tx={ft[3]:7.2f} Ty={ft[4]:7.2f} Tz={ft[5]:7.2f}"
                         )
+
                     self.publish_feedback(goal_handle, "contact_search", ft, 0.0, 0.40)
                     last_log = now
 
+                # 접촉 감지
                 if check_force_condition(DR_AXIS_Y, min=0, max=15.0, ref=DR_BASE) == -1:
                     base_pos, _ = get_current_posx(DR_BASE)
                     self.get_logger().info(f"[CONTACT] before_press_pos={base_pos}")
@@ -320,23 +323,32 @@ class PlaceTileActionServer(Node):
                         f"[CONTACT] touched=True contact_y={contact_y:.3f}"
                     )
 
+                    # 2차: 접촉 후 실제 압착 force 적용
+                    set_desired_force(
+                        fd=[0, press_force, 0, 0, 0, 0],
+                        dir=[0, 1, 0, 0, 0, 0],
+                        mod=DR_FC_MOD_REL
+                    )
+
+                    self.publish_feedback(goal_handle, "pressing", ft, 0.0, 0.70)
+
+                    if not self.sleep_interruptible(hold_time, goal_handle):
+                        release_force()
+                        return (False, 0.0, "canceled")
+
                     release_force()
+                    wait(0.2)
                     break
 
                 wait(0.1)
 
             if not touched or contact_joint is None:
                 self.get_logger().warn("[CONTACT] failed (timeout/no joint)")
-                return (False, 0.0, "contact_failed")
-
-            # amovej(contact_joint, vel=40, acc=40)
-
-            if not self.sleep_interruptible(1.0, goal_handle):
-                return (False, 0.0, "canceled")
+                return (True, 0.0, "contact_failed")
 
             final_pos, _ = get_current_posx(DR_BASE)
-            final_z = float(final_pos[2])
-            depth = float(final_z-contact_y)
+            final_y = float(final_pos[1])
+            depth = float(final_y - contact_y)
 
             self.get_logger().info(f"[RESULT] final_pose={final_pos} depth={depth:.3f}")
             self.publish_feedback(goal_handle, "pressed", self.read_ft_guess(), depth, 0.90)
@@ -366,8 +378,11 @@ class PlaceTileActionServer(Node):
             DR_BASE,
             movel,
             posx,
-            DR_MV_MOD_REL,
+            DR_MV_MOD_REL
         )
+
+        press_depth = 0.0
+        message = ""
 
         def move_relative(dx: float, dy: float, dz: float, dw: float = 0.0, dp: float = 0.0, dr: float = 0.0):
             from DSR_ROBOT2 import posx, movel, mwait, DR_BASE, get_current_posx
@@ -384,28 +399,11 @@ class PlaceTileActionServer(Node):
             movel(posx(target), ref=DR_BASE, vel=30, acc=30)
             mwait()
 
-        def move_absoulte(x: float, y: float, z: float, w: float = 0.0, p: float = 0.0, r: float = 0.0):
-            from DSR_ROBOT2 import posx, movel, mwait, DR_BASE, get_current_posx
-
-            cur, _ = get_current_posx(DR_BASE)
-            target = [
-                x,
-                y,
-                z,
-                cur[3] + w,
-                cur[4] + p,
-                cur[5] + r,
-            ]
-            movel(posx(target), ref=DR_BASE, vel=30, acc=30)
-            mwait()
-            print(get_current_posx(DR_BASE))
-
         def move_to_tile_place_position(placement_index: int):
             from DSR_ROBOT2 import posx, movel, mwait, DR_BASE
 
-            tool_pre_tilt = [369.025, 160.678, 196.749, 44.152, -179.9, -137.748]
-
-            tile_wid = 80.0  # mm
+            tool_pre_tilt = [369.025, 155.678, 196.749, 44.152, -179.9, -137.748]
+            tile_wid = 80.0
 
             tile_offsets = {
                 1: (-tile_wid,  tile_wid),
@@ -435,10 +433,8 @@ class PlaceTileActionServer(Node):
             mwait()
             return dx, dz
 
-        j_ready = posj([0, 0, 90, 0, 90, 0])
+        j_ready = posj([0, 0, 90, 0, 90, 180])
 
-
-        # 1) Home
         self.publish_feedback(goal_handle, "approach_home", None, 0.0, 0.05)
         movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
         mwait()
@@ -446,7 +442,6 @@ class PlaceTileActionServer(Node):
         if self.check_abort(goal_handle):
             return (False, press_depth, "canceled")
 
-        # 2) pre_place 이동
         self.publish_feedback(goal_handle, "approach_pre_place", None, 0.0, 0.15)
         dx, dz = move_to_tile_place_position(self.placement_index)
 
@@ -455,64 +450,58 @@ class PlaceTileActionServer(Node):
 
         self.publish_feedback(goal_handle, "approach_target", None, 0.0, 0.25)
 
-        tool_tilt = [369.025, 160.678, 196.749, 91.799, -162.285, -90.1]
+        tool_tilt = [369.025, 155.678, 196.749, 91.799, -162.285, -90.1]
         tool_tilt_target = tool_tilt.copy()
         tool_tilt_target[0] += dx
         tool_tilt_target[2] += dz
-        movel(posx(tool_tilt_target), 30, 30, ref=DR_BASE)
+        movel(posx(tool_tilt_target), vel=30, acc=30, ref=DR_BASE)
         mwait()
 
         if self.check_abort(goal_handle):
             return (False, press_depth, "canceled")
 
-        # 4) 압착
         self.get_logger().info(f"[PLACE_TILE] compact start (tile={self.placement_index})")
-
         ok, press_depth, message = self.compact_tile(
             goal_handle,
             timeout_s=20.0,
             log_dt=0.1,
         )
-        
+
         if not ok:
             return (False, press_depth, message)
 
-
         move_relative(0.0, -23.68, 0.0)
+
+        if self.check_abort(goal_handle):
+            return (False, press_depth, "canceled")
+
+        movej(j_ready, vel=80, acc=80)
         mwait()
 
         if self.check_abort(goal_handle):
             return (False, press_depth, "canceled")
 
-        # 중간 홈 복귀
-        movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
+        tool_pre_release = posx([239.723, -354.567 + 10.0, 201.217, 122.919, -179.643, -57.826 + 180.0])
+        tool_release = posx([239.723, -354.567 + 10.0, 120.736, 122.919, -179.643, -57.826 + 180.0])
 
-        if self.check_abort(goal_handle):
-            return (False, press_depth, "canceled")
-
-        # 8) 툴 반납 위치 이동
-        tool_pre_release = posx([239.723, -354.567+10.0, 201.217, 122.919, -179.643, -57.826+180.0])
-        tool_release = posx([239.723, -354.567+10.0, 120.736, 122.919, -179.643, -57.826+180.0])
-
-        movel(tool_pre_release, vel=30, acc=30)
+        movel(tool_pre_release, vel=80, acc=80)
         mwait()
+
         movel(tool_release, vel=30, acc=30)
         mwait()
-        movel(posx([0,-10.0,0,0,0,0]), vel=30, acc=30)
+
+        movel(posx([0, -10.0, 0, 0, 0, 0]), vel=20, acc=20, ref=DR_BASE, mod=DR_MV_MOD_REL)
         mwait()
 
         self.gripper.open_gripper()
-        
-        # 8) 툴 반납후 상단 이동
+
         move_relative(0.0, 0.0, 40.0)
 
-
-        # 9) 홈 복귀
         self.publish_feedback(goal_handle, "return_home", None, press_depth, 0.98)
         movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
+        mwait()
 
         self.publish_feedback(goal_handle, "done", None, press_depth, 1.0)
-
         return (True, press_depth, message)
 
 

@@ -254,14 +254,42 @@ class PickTileActionServer(Node):
             self.publish_feedback(goal_handle, 4, 0.45, "depth_target_not_found")
             return False, "depth_target_not_found"
 
+        # camera depth 원본값(mm)
+        filtered_depth = getattr(self.depth_localizer, "last_filtered_depth", None)
+
+        if filtered_depth is None:
+            self.publish_feedback(goal_handle, 4, 0.45, "depth_value_missing")
+            self.get_logger().warn("[PICK_TILE] filtered_depth is None")
+            return False, "depth_value_missing"
+
         target_xyz = [
             float(base_point[0]),
             float(base_point[1]),
             float(base_point[2]),
         ]
-        self.get_logger().info(f"[PICK_TILE] step4: estimated base_point={base_point.tolist()}")
 
-        time.sleep(3.0)
+        self.get_logger().info(
+            f"[PICK_TILE] step4: estimated base_point={base_point.tolist()}, "
+            f"filtered_depth={filtered_depth:.1f} mm"
+        )
+
+        # --------------------------------------------------
+        # 타일 존재 여부 판단: camera filtered_depth 기준
+        # --------------------------------------------------
+        if float(filtered_depth) >= 401.0:
+            self.get_logger().warn(
+                f"[PICK_TILE] no more tiles!: filtered_depth={filtered_depth:.1f} >= 401.0"
+            )
+
+            self.publish_feedback(goal_handle, 4, 0.45, "tile_not_found", target_xyz)
+
+            # 홈 복귀
+            j_ready = posj([0, 0, 90, 0, 90, 0])
+            movej(j_ready, vel=self.robot_cfg.vel, acc=self.robot_cfg.acc)
+            mwait()
+
+            return False, f"tile_not_found_depth_{filtered_depth:.1f}"
+
         # 5) pick 상단 이동
         pick_above = self.get_pick_above_pos(tile_type)
         self.publish_feedback(goal_handle, 5, 0.60, "move_pick_above", pick_above[:3])

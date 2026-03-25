@@ -14,8 +14,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from action_msgs.msg import GoalStatus
 
-from tilemate_msgs.srv import Inspect
-from tilemate_msgs.action import ExecuteJob, PickTile, PlaceTile, Cowork
+from tilemate_msgs.action import ExecuteJob, PickTile, PlaceTile, Cowork, Inspect, Press, PatternInspect
 from tilemate_main.robot_config import RobotConfig
 
 
@@ -25,6 +24,7 @@ class TileRunContext:
     tile_index: int
     tile_type: int
     total_tiles: int
+
 
 @dataclass
 class TileStepDef:
@@ -85,8 +85,14 @@ class TaskManagerNode(Node):
         self.place_client = ActionClient(
             self, PlaceTile, f"{robot_ns}/tile/place_press", callback_group=self.cb_group
         )
-        self.inspect_client = self.create_client(
-            Inspect, f"{robot_ns}/tile/inspect", callback_group=self.cb_group
+        self.inspect_client = ActionClient(
+            self, Inspect, f"{robot_ns}/tile/inspect", callback_group=self.cb_group
+        )
+        self.press_client = ActionClient(
+            self, Press, f"{robot_ns}/tile/press", callback_group=self.cb_group
+        )
+        self.pattern_inspect_client = ActionClient(
+            self, PatternInspect, f"{robot_ns}/tile/pattern_inspect", callback_group=self.cb_group
         )
 
         self._current_total_tiles = 0
@@ -96,14 +102,18 @@ class TaskManagerNode(Node):
         self.current_detail_progress = 0.0
         self.current_state = ""
 
-
         self.tile_steps = [
             TileStepDef(self.TILE_STEP_PICK, "pick", self._step_pick),
             TileStepDef(self.TILE_STEP_COWORK, "cowork", self._step_cowork),
             TileStepDef(self.TILE_STEP_PLACE, "place", self._step_place),
-            TileStepDef(self.TILE_STEP_INSPECT, "inspect", self._step_inspect),
+            # 9개 다 설치하고 검사할 경우 주석
+            # TileStepDef(self.TILE_STEP_INSPECT, "inspect", self._step_inspect),
+            # TileStepDef(self.TILE_STEP_COMPACT, "compact", self._step_compact),
         ]
 
+        self.get_logger().info(
+            f"name={self.get_name()}, ns={self.get_namespace()}, fq={self.get_fully_qualified_name()}"
+        )
         self.get_logger().info("\033[94m [1/5] [TASK_MANAGER] initialize Done!\033[0m")
 
     # --------------------------------------------------
@@ -209,6 +219,19 @@ class TaskManagerNode(Node):
             return True, f"canceled_{phase}"
         return False, ""
 
+    def _is_tile_absent_message(self, msg: str) -> bool:
+        if not msg:
+            return False
+
+        s = str(msg).lower()
+        keywords = [
+            "tile_not_found",
+            "tray_empty",
+            "depth_target_not_found",
+            "depth_value_missing",
+        ]
+        return any(k in s for k in keywords)
+
     # --------------------------------------------------
     # /kill
     # --------------------------------------------------
@@ -306,6 +329,67 @@ class TaskManagerNode(Node):
             )
         return _cb
 
+    def _make_inspect_feedback_cb(self, goal_handle, tile_index: int, tile_type: int):
+        def _cb(feedback_msg):
+            fb = feedback_msg.feedback
+            step = int(getattr(fb, "step", 0))
+            progress = float(getattr(fb, "progress", 0.0))
+            state = str(getattr(fb, "state", "inspect"))
+
+            if progress > 1.0:
+                progress = progress / 100.0
+
+            progress = max(0.0, min(1.0, progress))
+
+            self._update_and_publish_feedback(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                detail_step=self.TILE_STEP_INSPECT,
+                detail_progress=progress,
+                state=f"inspect:{step}:{state}",
+            )
+        return _cb
+
+    def _make_press_feedback_cb(self, goal_handle, tile_index: int, tile_type: int):
+        def _cb(feedback_msg):
+            fb = feedback_msg.feedback
+            step = int(getattr(fb, "step", 0))
+            progress = float(getattr(fb, "progress", 0.0))
+            state = str(getattr(fb, "state", "compact"))
+
+            if progress > 1.0:
+                progress = progress / 100.0
+
+            progress = max(0.0, min(1.0, progress))
+
+            self._update_and_publish_feedback(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                detail_step=self.TILE_STEP_COMPACT,
+                detail_progress=progress,
+                state=f"compact:{step}:{state}",
+            )
+        return _cb
+
+    def _make_pattern_inspect_feedback_cb(self, goal_handle, tile_index: int, tile_type: int):
+        def _cb(feedback_msg):
+            fb = feedback_msg.feedback
+            current_frame = int(getattr(fb, "current_frame", 0))
+            progress = float(getattr(fb, "progress", 0.0))
+            state = str(getattr(fb, "state", "pattern_inspect"))
+
+            self._update_and_publish_feedback(
+                goal_handle=goal_handle,
+                tile_index=tile_index,
+                tile_type=tile_type,
+                detail_step=self.TILE_STEP_INSPECT,
+                detail_progress=progress,
+                state=f"inspect:pattern:{current_frame}:{state}",
+            )
+        return _cb
+
     # --------------------------------------------------
     # generic action runner
     # --------------------------------------------------
@@ -365,7 +449,6 @@ class TaskManagerNode(Node):
     # --------------------------------------------------
     # specific subtasks
     # --------------------------------------------------
-
     async def _step_pick(self, ctx: TileRunContext):
         return await self.call_pick_tile(
             goal_handle=ctx.goal_handle,
@@ -389,13 +472,31 @@ class TaskManagerNode(Node):
         )
 
     async def _step_inspect(self, ctx: TileRunContext):
-        return await self.call_inspect(
+        ok, msg = await self.call_inspect(
             goal_handle=ctx.goal_handle,
             tile_index=ctx.tile_index,
             tile_type=ctx.tile_type,
             total_tiles=ctx.total_tiles,
         )
+        if not ok:
+            return False, f"depth_inspect_failed:{msg}"
 
+        ok, msg = await self.call_pattern_inspect(
+            goal_handle=ctx.goal_handle,
+            tile_index=ctx.tile_index,
+            tile_type=ctx.tile_type,
+        )
+        if not ok:
+            return False, f"pattern_inspect_failed:{msg}"
+
+        return True, "inspect_all_ok"
+
+    async def _step_compact(self, ctx: TileRunContext):
+        return await self.call_press(
+            goal_handle=ctx.goal_handle,
+            tile_index=ctx.tile_index,
+            tile_type=ctx.tile_type,
+        )
 
     async def call_pick_tile(self, goal_handle, tile_index, tile_type):
         goal = PickTile.Goal()
@@ -428,9 +529,11 @@ class TaskManagerNode(Node):
 
     async def call_place_tile(self, goal_handle, tile_index, tile_type):
         goal = PlaceTile.Goal()
-        goal.placement_index = tile_index + 1
-        goal.max_press_force = 30.0
-        goal.target_press_depth = 5.0
+        goal.placement_index = tile_index+1
+        goal.search_force = 15.0
+        goal.press_force = 40.0
+        goal.hold_time = 0.8
+        goal.target_press_depth = 3.0
 
         return await self._run_action_subtask(
             client=self.place_client,
@@ -444,8 +547,7 @@ class TaskManagerNode(Node):
     async def call_inspect(self, goal_handle, tile_index, tile_type, total_tiles):
         del total_tiles
 
-        if self.kill_requested:
-            return False, "killed_before_inspect"
+        goal = Inspect.Goal()
 
         self._update_and_publish_feedback(
             goal_handle=goal_handle,
@@ -453,52 +555,164 @@ class TaskManagerNode(Node):
             tile_type=tile_type,
             detail_step=self.TILE_STEP_INSPECT,
             detail_progress=0.0,
-            state="inspect:waiting_service",
+            state="inspect:goal_send",
         )
 
-        if not self.inspect_client.wait_for_service(timeout_sec=2.0):
-            return False, "inspect_service_unavailable"
+        return await self._run_action_subtask(
+            client=self.inspect_client,
+            client_name="inspect_action",
+            goal_msg=goal,
+            feedback_callback=self._make_inspect_feedback_cb(goal_handle, tile_index, tile_type),
+            goal_handle=goal_handle,
+            phase_name="inspect",
+        )
 
-        aborted, msg = self._check_abort_requested(goal_handle, "before_inspect_call")
-        if aborted:
-            return False, msg
+    async def call_pattern_inspect(self, goal_handle, tile_index, tile_type):
+        goal = PatternInspect.Goal()
+        goal.target_frames = 60
+        goal.pixel_threshold = 60
+        goal.match_dist_threshold = 50.0
+
+        return await self._run_action_subtask(
+            client=self.pattern_inspect_client,
+            client_name="pattern_inspect_action",
+            goal_msg=goal,
+            feedback_callback=self._make_pattern_inspect_feedback_cb(goal_handle, tile_index, tile_type),
+            goal_handle=goal_handle,
+            phase_name="pattern_inspect",
+        )
+
+    async def call_press(self, goal_handle, tile_index, tile_type):
+        goal = Press.Goal()
+        goal.result_json_path = ""
+        goal.press_threshold_mm = 1.0
+        goal.approach_offset_mm = 20.0
+        goal.press_overshoot_mm = 1.0
+        goal.press_force_n = 30.0
+        goal.press_speed_mm_s = 30.0
 
         self._update_and_publish_feedback(
             goal_handle=goal_handle,
             tile_index=tile_index,
             tile_type=tile_type,
-            detail_step=self.TILE_STEP_INSPECT,
-            detail_progress=0.3,
-            state="inspect:calling_service",
+            detail_step=self.TILE_STEP_COMPACT,
+            detail_progress=0.0,
+            state="compact:goal_send",
         )
 
-        req = Inspect.Request()
-        resp = await self.inspect_client.call_async(req)
-
-        if resp is None:
-            return False, "inspect_response_none"
-
-        aborted, msg = self._check_abort_requested(goal_handle, "after_inspect_call")
-        if aborted:
-            return False, msg
-
-        if not resp.success:
-            return False, resp.message
-
-        self._update_and_publish_feedback(
+        return await self._run_action_subtask(
+            client=self.press_client,
+            client_name="press_action",
+            goal_msg=goal,
+            feedback_callback=self._make_press_feedback_cb(goal_handle, tile_index, tile_type),
             goal_handle=goal_handle,
-            tile_index=tile_index,
-            tile_type=tile_type,
-            detail_step=self.TILE_STEP_INSPECT,
-            detail_progress=1.0,
-            state="inspect:done",
+            phase_name="compact",
         )
-
-        return True, resp.message
 
     # --------------------------------------------------
     # execute
     # --------------------------------------------------
+
+    # 타일 한개마다 검사 모드
+    # async def execute_callback(self, goal_handle):
+    #     result = ExecuteJob.Result()
+    #     req = goal_handle.request
+    #
+    #     self.active_job_goal = goal_handle
+    #     self.active_sub_goal = None
+    #     self.kill_requested = False
+    #
+    #     try:
+    #         layout = list(req.design_layout)
+    #         total_tiles = len(layout)
+    #         self._current_total_tiles = total_tiles
+    #
+    #         start_tile_index = int(req.current_tile_index) if req.is_resume else 0
+    #         start_step = int(req.current_step) if req.is_resume else self.TILE_STEP_IDLE
+    #
+    #         if start_tile_index >= total_tiles:
+    #             goal_handle.succeed()
+    #             result.success = True
+    #             result.message = "already_finished"
+    #             return result
+    #
+    #         for tile_index in range(start_tile_index, total_tiles):
+    #             aborted, msg = self._check_abort_requested(goal_handle, "before_tile_start")
+    #             if aborted:
+    #                 if self.kill_requested:
+    #                     goal_handle.abort()
+    #                     result.success = False
+    #                     result.message = msg
+    #                 else:
+    #                     goal_handle.canceled()
+    #                     result.success = False
+    #                     result.message = msg
+    #                 return result
+    #
+    #             tile_type = int(layout[tile_index])
+    #             tile_step_start = int(start_step) if (req.is_resume and tile_index == start_tile_index) else self.TILE_STEP_IDLE
+    #
+    #             ok, msg = await self.run_single_tile(
+    #                 goal_handle=goal_handle,
+    #                 tile_index=tile_index,
+    #                 tile_type=tile_type,
+    #                 total_tiles=total_tiles,
+    #                 tile_step_start=tile_step_start,
+    #             )
+    #
+    #             if not ok:
+    #                 if self.kill_requested:
+    #                     goal_handle.abort()
+    #                     result.success = False
+    #                     result.message = f"killed:{msg}"
+    #                 elif goal_handle.is_cancel_requested:
+    #                     goal_handle.canceled()
+    #                     result.success = False
+    #                     result.message = f"canceled:{msg}"
+    #                 else:
+    #                     goal_handle.abort()
+    #                     result.success = False
+    #                     result.message = msg
+    #                 return result
+    #
+    #         self._update_and_publish_feedback(
+    #             goal_handle=goal_handle,
+    #             tile_index=total_tiles - 1 if total_tiles > 0 else 0,
+    #             tile_type=int(layout[-1]) if total_tiles > 0 else 0,
+    #             detail_step=self.TILE_STEP_DONE,
+    #             detail_progress=1.0,
+    #             state="done",
+    #             overall_step=self.OVERALL_FINISHED,
+    #         )
+    #
+    #         goal_handle.succeed()
+    #         result.success = True
+    #         result.message = "all_tiles_completed"
+    #         return result
+    #
+    #     except Exception as e:
+    #         self.get_logger().error(f"[TASK] execute failed: {repr(e)}")
+    #         self.get_logger().error(traceback.format_exc())
+    #         try:
+    #             goal_handle.abort()
+    #         except Exception:
+    #             pass
+    #         result.success = False
+    #         result.message = f"exception:{repr(e)}"
+    #         return result
+    #
+    #     finally:
+    #         self.active_job_goal = None
+    #         self.active_sub_goal = None
+    #         self.kill_requested = False
+    #         self._current_total_tiles = 0
+    #         self.current_tile_index = -1
+    #         self.current_tile_type = -1
+    #         self.current_detail_step = self.TILE_STEP_IDLE
+    #         self.current_detail_progress = 0.0
+    #         self.current_state = ""
+
+    # 타일 9개 설치하고 검사 모드
     async def execute_callback(self, goal_handle):
         result = ExecuteJob.Result()
         req = goal_handle.request
@@ -521,6 +735,9 @@ class TaskManagerNode(Node):
                 result.message = "already_finished"
                 return result
 
+            # --------------------------------------------------
+            # 1) 모든 타일에 대해 pick -> cowork -> place 수행
+            # --------------------------------------------------
             for tile_index in range(start_tile_index, total_tiles):
                 aborted, msg = self._check_abort_requested(goal_handle, "before_tile_start")
                 if aborted:
@@ -535,7 +752,20 @@ class TaskManagerNode(Node):
                     return result
 
                 tile_type = int(layout[tile_index])
-                tile_step_start = int(start_step) if (req.is_resume and tile_index == start_tile_index) else self.TILE_STEP_IDLE
+
+                # resume일 때 시작 타일만 current_step부터 재개
+                # 단, 타일 반복 단계는 pick/cowork/place까지만 허용
+                if req.is_resume and tile_index == start_tile_index:
+                    tile_step_start = int(start_step)
+                    if tile_step_start > self.TILE_STEP_PLACE:
+                        tile_step_start = self.TILE_STEP_IDLE
+                else:
+                    tile_step_start = self.TILE_STEP_IDLE
+
+                self.get_logger().info(
+                    f"[TASK] tile start: index={tile_index}, type={tile_type}, "
+                    f"tile_step_start={tile_step_start}"
+                )
 
                 ok, msg = await self.run_single_tile(
                     goal_handle=goal_handle,
@@ -543,6 +773,10 @@ class TaskManagerNode(Node):
                     tile_type=tile_type,
                     total_tiles=total_tiles,
                     tile_step_start=tile_step_start,
+                )
+
+                self.get_logger().info(
+                    f"[TASK] tile done: index={tile_index}, ok={ok}, msg={msg}"
                 )
 
                 if not ok:
@@ -560,10 +794,137 @@ class TaskManagerNode(Node):
                         result.message = msg
                     return result
 
+            # --------------------------------------------------
+            # 2) 전체 배치 완료 후 inspect 1회
+            # --------------------------------------------------
+            final_tile_index = total_tiles - 1
+            final_tile_type = int(layout[-1]) if total_tiles > 0 else 0
+
+            aborted, msg = self._check_abort_requested(goal_handle, "before_final_inspect")
+            if aborted:
+                if self.kill_requested:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = msg
+                else:
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = msg
+                return result
+
+            self.get_logger().info("[TASK] final inspect start")
+
+            ok, msg = await self.call_inspect(
+                goal_handle=goal_handle,
+                tile_index=final_tile_index,
+                tile_type=final_tile_type,
+                total_tiles=total_tiles,
+            )
+
+            self.get_logger().info(f"[TASK] final inspect done: ok={ok}, msg={msg}")
+
+            if not ok:
+                if self.kill_requested:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = f"killed:inspect_failed:{msg}"
+                elif goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = f"canceled:inspect_failed:{msg}"
+                else:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = f"inspect_failed:{msg}"
+                return result
+
+            # --------------------------------------------------
+            # 3) 전체 배치 완료 후 pattern inspect 1회
+            # --------------------------------------------------
+            aborted, msg = self._check_abort_requested(goal_handle, "before_final_pattern_inspect")
+            if aborted:
+                if self.kill_requested:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = msg
+                else:
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = msg
+                return result
+
+            self.get_logger().info("[TASK] final pattern inspect start")
+
+            ok, msg = await self.call_pattern_inspect(
+                goal_handle=goal_handle,
+                tile_index=final_tile_index,
+                tile_type=final_tile_type,
+            )
+
+            self.get_logger().info(f"[TASK] final pattern inspect done: ok={ok}, msg={msg}")
+
+            if not ok:
+                if self.kill_requested:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = f"killed:pattern_inspect_failed:{msg}"
+                elif goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = f"canceled:pattern_inspect_failed:{msg}"
+                else:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = f"pattern_inspect_failed:{msg}"
+                return result
+
+            # --------------------------------------------------
+            # 4) 전체 검사 후 press 1회
+            # --------------------------------------------------
+            aborted, msg = self._check_abort_requested(goal_handle, "before_final_compact")
+            if aborted:
+                if self.kill_requested:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = msg
+                else:
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = msg
+                return result
+
+            self.get_logger().info("[TASK] final compact start")
+
+            ok, msg = await self.call_press(
+                goal_handle=goal_handle,
+                tile_index=final_tile_index,
+                tile_type=final_tile_type,
+            )
+
+            self.get_logger().info(f"[TASK] final compact done: ok={ok}, msg={msg}")
+
+            if not ok:
+                if self.kill_requested:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = f"killed:compact_failed:{msg}"
+                elif goal_handle.is_cancel_requested:
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = f"canceled:compact_failed:{msg}"
+                else:
+                    goal_handle.abort()
+                    result.success = False
+                    result.message = f"compact_failed:{msg}"
+                return result
+
+            # --------------------------------------------------
+            # 5) 전체 완료
+            # --------------------------------------------------
             self._update_and_publish_feedback(
                 goal_handle=goal_handle,
-                tile_index=total_tiles - 1 if total_tiles > 0 else 0,
-                tile_type=int(layout[-1]) if total_tiles > 0 else 0,
+                tile_index=final_tile_index if total_tiles > 0 else 0,
+                tile_type=final_tile_type,
                 detail_step=self.TILE_STEP_DONE,
                 detail_progress=1.0,
                 state="done",
@@ -618,7 +979,30 @@ class TaskManagerNode(Node):
 
             ok, msg = await step_def.runner(ctx)
             if not ok:
-                return False, f"{step_def.name}_failed:{msg}"
+                fail_msg = f"{step_def.name}_failed:{msg}"
+
+                # pick 단계에서 타일 없음 상태를 별도로 구분
+                if step_def.step_id == self.TILE_STEP_PICK and self._is_tile_absent_message(msg):
+                    self._update_and_publish_feedback(
+                        goal_handle=goal_handle,
+                        tile_index=tile_index,
+                        tile_type=tile_type,
+                        detail_step=self.TILE_STEP_PICK,
+                        detail_progress=1.0,
+                        state=f"pick:tile_absent:{msg}",
+                    )
+                    return False, f"tile_absent:{fail_msg}"
+
+                # 일반 실패 상태
+                self._update_and_publish_feedback(
+                    goal_handle=goal_handle,
+                    tile_index=tile_index,
+                    tile_type=tile_type,
+                    detail_step=step_def.step_id,
+                    detail_progress=1.0,
+                    state=f"{step_def.name}:failed:{msg}",
+                )
+                return False, fail_msg
 
             aborted, abort_msg = self._check_abort_requested(
                 goal_handle, f"after_{step_def.name}"

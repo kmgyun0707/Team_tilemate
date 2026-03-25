@@ -6,7 +6,7 @@ from sensor_msgs.msg import Image, CameraInfo
 
 
 class DepthLocalizer:
-    def __init__(self, node, gripper2cam_path, use_inverse=True):
+    def __init__(self, node, gripper2cam_path, use_inverse=False):
         """
         Args:
             node: rclpy Node
@@ -23,16 +23,17 @@ class DepthLocalizer:
         self.cy = None
         self.gripper2cam_path = gripper2cam_path
         self.use_inverse = use_inverse
+        self.last_filtered_depth = None
 
         self.node.create_subscription(
             Image,
-            "/camera/camera/depth/image_rect_raw",
+            "/camera/camera/aligned_depth_to_color/image_raw",
             self.depth_callback,
             10
         )
         self.node.create_subscription(
             CameraInfo,
-            "/camera/camera/depth/camera_info",
+            "/camera/camera/aligned_depth_to_color/camera_info",
             self.camera_info_callback,
             10
         )
@@ -190,6 +191,8 @@ class DepthLocalizer:
             filtered_depth = float(np.median(inliers))
         else:
             filtered_depth = float(median_depth)
+
+        self.last_filtered_depth = float(filtered_depth)
 
         return filtered_depth
 

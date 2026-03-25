@@ -1,0 +1,10 @@
+# no goal
+---
+# result
+bool success
+string message
+---
+# Feedback
+int32 step
+float32 progress
+string state

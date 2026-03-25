@@ -1,0 +1,26 @@
+# Press.action
+# tilemate_msgs/action/Press.action
+#
+# 단차 불량 타일을 TCP 끝단으로 눌러 보정하는 액션
+
+# -------- Goal --------
+string  result_json_path        # inspect_result.json 경로 (비어있으면 노드 파라미터 사용)
+float32 press_threshold_mm      # 단차 불량 판단 임계값 (mm). 0이면 노드 파라미터 사용
+float32 approach_offset_mm      # 타일 앞 접근 거리 (mm). 기본 20.0
+float32 press_overshoot_mm      # 목표 깊이에 추가할 여유 (mm). 기본 1.0
+float32 press_force_n           # 순응 제어 목표 힘 (N). 기본 15.0
+float32 press_speed_mm_s        # 누르기 속도 (mm/s). 기본 10.0
+---
+# -------- Result --------
+bool    success
+string  message
+int32   pressed_count           # 실제로 press한 타일 수
+float32 pressed_depth
+
+---
+# -------- Feedback --------
+int32   step                    # 현재 단계 번호
+float32 progress                # 0.0 ~ 100.0
+string  state                   # 현재 상태 문자열
+int32   total_defects           # 전체 불량 타일 수
+int32   current_defect_index    # 현재 처리 중인 타일 인덱스

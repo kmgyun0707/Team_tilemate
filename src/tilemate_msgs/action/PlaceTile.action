@@ -1,7 +1,9 @@
 # goal
-int32 placement_index # 놓일 타일 위치
-float32 max_press_force # 최대 누를 힘 
-float32 target_press_depth # 목표 압착 깊이
+int32 placement_index        # 놓일 타일 위치
+float32 search_force         # 접촉 탐색 힘
+float32 press_force          # 실제 압착 힘
+float32 hold_time            # 압착 유지 시간
+float32 target_press_depth   # 목표 압착 깊이
 ---
 # result
 bool success
